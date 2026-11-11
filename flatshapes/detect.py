@@ -1,5 +1,6 @@
-"""Shape classification: every detector is tried on a mask and the simplest model whose error is close to the best
-wins (a circle beats an ellipse that is only slightly better, an ellipse beats a 8-point polygon)."""
+"""Shape classification: every detector is tried on a mask and the model with the fewest parameters whose error is
+close to the best wins (a circle beats an ellipse that is only slightly better; a 4-point star, 14 parameters,
+beats the 8-vertex polygon through its tips and notches, 26 parameters)."""
 import numpy as np
 
 from .circle import fit_circle, equalize_radii
@@ -25,14 +26,14 @@ def detect_shape(mask, hidden=None, kinds=ORDER, slack=0.15, options=None):
         return None
     best = min(f.metrics["mean"] for f in fits)
     ok = [f for f in fits if f.metrics["mean"] <= best + slack]
-    return min(ok, key=lambda f: (ORDER.index(f.kind) if f.kind in ORDER else 99, f.n_params))
+    return min(ok, key=lambda f: (f.n_params, f.metrics["mean"]))
 
 
-def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, equal_radius=True, colours=None,
+def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, equal_radius=True, colours=None, rim=4,
                   **kw):
     """Run detect_shape on every connected component of every label of a label map (H, W).
     hidden_by_others: outline that touches another non-background label counts as hidden (the neighbour may be in
-    front). colours: optional {label: CIELAB} for grouping same-size dots. Returns a list of
+    front); parts of another label thinner than `rim` px (anti-aliasing fringes) do not count. colours: optional {label: CIELAB} for grouping same-size dots. Returns a list of
     (label, component index, ShapeFit)."""
     import cv2
     from scipy import ndimage as ndi
@@ -53,7 +54,9 @@ def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, e
                 other = L[y0:y1, x0:x1] != lab
                 if background is not None:
                     other &= L[y0:y1, x0:x1] != background
-                hid = cv2.dilate(other.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+                # thin rims of another colour (anti-aliasing fringes) are not objects in front
+                body = cv2.morphologyEx(other.astype(np.uint8), cv2.MORPH_OPEN, np.ones((rim + 1, rim + 1), np.uint8))
+                hid = cv2.dilate(body, np.ones((3, 3), np.uint8)) > 0
             f = detect_shape(m, hid, **kw)
             if f is None:
                 continue

@@ -58,10 +58,11 @@ def merge_collinear(segments, max_angle=4.0, max_offset=2.0, max_gap=90.0, noisy
 
 
 def detect_lines(mask, body_r=4.0, min_len=20.0, max_width=9.0, hough_threshold=15, max_line_gap=3, merge=True,
-                 **merge_kw):
+                 side_gap=2.0, min_free=0.7, **merge_kw):
     """Thin straight strokes in a binary mask. body = what survives an opening with a disc of radius body_r (thick
     parts, e.g. a star the strings run into); lines are searched on the skeleton of the rest. A line is kept when it
-    is at least min_len long and at most max_width wide (twice the median distance to the edge along it).
+    is at least min_len long, at most max_width wide (twice the median distance to the edge along it) and has
+    empty space on both sides (at least min_free of the samples side_gap px beyond its edges).
     Returns a list of ShapeFit(kind="line") with params p0, p1, width."""
     import cv2
     from skimage.morphology import skeletonize
@@ -96,6 +97,39 @@ def detect_lines(mask, body_r=4.0, min_len=20.0, max_width=9.0, hough_threshold=
         width = 2.0 * float(np.median(dv[on]))
         if width > max_width:
             continue
+        # a real stroke has empty space on both sides; a straight run along the edge of a big shape (a letter)
+        # has the shape on one side
+        u = (p1 - p0) / L
+        nrm = np.array([-u[1], u[0]])
+        free = []
+        for sgn in (1, -1):
+            qs = np.round(p0 + t[:, None] * (p1 - p0) + sgn * (width / 2 + side_gap) * nrm).astype(int)
+            inside = (qs[:, 0] >= 0) & (qs[:, 1] >= 0) & (qs[:, 0] < w) & (qs[:, 1] < h)
+            qs = qs[inside]
+            free.append(float((K[qs[:, 1], qs[:, 0]] == 0).mean()) if len(qs) else 1.0)
+        if min(free) < min_free:
+            continue
         out.append(ShapeFit("line", dict(p0=p0, p1=p1, width=width), f"M{fmt(p0)}L{fmt(p1)}",
                             dict(length=L, coverage=float(on.mean()))))
     return out
+
+
+def same_sides(line, labels, offset=None, min_share=0.7):
+    """True when a line has the same label on both sides (a stroke over one background), judged on samples
+    `offset` px beyond its edges (default width / 2 + 2). An anti-aliasing rim along the edge of a shape has the
+    shape on one side and the background on the other, so it fails."""
+    L = np.asarray(labels)
+    h, w = L.shape
+    p0, p1 = line.params["p0"], line.params["p1"]
+    off = line.params["width"] / 2 + 2.0 if offset is None else offset
+    n = max(4, int(np.linalg.norm(p1 - p0)))
+    u = (p1 - p0) / max(1e-9, np.linalg.norm(p1 - p0))
+    nrm = np.array([-u[1], u[0]])
+    t = np.linspace(0.1, 0.9, n)[:, None]
+    sides = []
+    for sgn in (1, -1):
+        q = np.clip(np.round(p0 + t * (p1 - p0) + sgn * off * nrm).astype(int), 0, [w - 1, h - 1])
+        v = L[q[:, 1], q[:, 0]]
+        vals, cnt = np.unique(v, return_counts=True)
+        sides.append((vals[cnt.argmax()], cnt.max() / len(v)))
+    return sides[0][0] == sides[1][0] and min(sides[0][1], sides[1][1]) >= min_share

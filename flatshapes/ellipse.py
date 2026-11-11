@@ -38,9 +38,11 @@ def _dist_to_ellipse(P, c, a, b, theta, n=720):
     return cKDTree(Q).query(P)[0]
 
 
-def fit_ellipse(mask, hidden=None, min_axis=2.0, max_mean=0.5, max_p80=1.0, min_visible=0.4, max_gap_deg=200.0):
+def fit_ellipse(mask, hidden=None, min_axis=2.0, max_mean=0.5, max_p80=1.0, min_visible=0.4, max_gap_deg=200.0,
+                max_aspect=6.0):
     """Ellipse fitted to the visible outline of one shape mask. Returns ShapeFit(kind="ellipse") or None.
-    params: cx, cy, a, b (semi-axes), theta (radians)."""
+    params: cx, cy, a, b (semi-axes), theta (radians). A very long thin shape (a line, a stroke; axis ratio above
+    max_aspect) is not an ellipse."""
     import cv2
     K = np.asarray(mask, bool)
     h, w = K.shape
@@ -52,7 +54,7 @@ def fit_ellipse(mask, hidden=None, min_axis=2.0, max_mean=0.5, max_p80=1.0, min_
         return None
     (cx, cy), (W, H), ang = cv2.fitEllipse(Pv.astype(np.float32).reshape(-1, 1, 2))
     a, b, th = W / 2, H / 2, np.radians(ang)
-    if min(a, b) < min_axis or not np.isfinite([cx, cy, a, b]).all():
+    if min(a, b) < min_axis or not np.isfinite([cx, cy, a, b]).all() or max(a, b) > max_aspect * min(a, b):
         return None
     a_ = np.sort(np.arctan2(Pv[:, 1] - cy, Pv[:, 0] - cx))
     if np.degrees(np.diff(np.r_[a_, a_[0] + 2 * np.pi]).max()) > max_gap_deg:

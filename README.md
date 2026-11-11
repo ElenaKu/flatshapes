@@ -68,13 +68,23 @@ Thresholds are the values tuned in flat2svg on real illustration packs; all are 
 | detector | accepted when |
 |---|---|
 | circle | mean dist <= 0.45 px (best 90 % of points), p80 <= 0.9 px, visible outline covers the circle (gap <= 200 deg) |
-| ellipse | mean <= 0.5 px, p80 <= 1.0 px, gap <= 200 deg |
+| ellipse | mean <= 0.5 px, p80 <= 1.0 px, gap <= 200 deg, axis ratio <= 6 |
 | polygon | 3..12 sides, mean <= 0.8 px, p80 <= 1.3 px |
 | star | 4..8 tips, tip >= 1.5 x inscribed radius, mean <= 0.7 px (best 85 %), p80 <= 1.5 px, area error <= 6 % |
-| line | length >= 20 px, width <= 9 px; pieces join at <= 4 deg, <= 2 px offset, <= 90 px gap |
+| line | length >= 20 px, width <= 9 px, empty space on both sides; pieces join at <= 4 deg, <= 2 px offset, <= 90 px gap |
 
 A star with sharp inner corners (a classic 5-point star) is a 10-vertex polygon; the star model is for stars with
 curved sides (sparkles, twinkles).
+
+## Trying it on images
+
+```
+python tools/shapes_report.py INPUT_DIR OUTPUT_DIR --colors 8
+```
+
+Walks INPUT_DIR recursively (same folder structure in OUTPUT_DIR), quantizes each image with k-means, runs
+`detect_shapes` and `detect_lines`, and writes `<name>_shapes.png` (shapes outlined by kind), `<name>_shapes.json`
+and `summary.csv`.
 
 ## Tests
 
