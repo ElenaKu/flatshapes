@@ -375,7 +375,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("images", nargs="?", help="folder with test images (subfolders included); optional")
     ap.add_argument("--verdicts", help="folder for verdict JSON files")
-    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--port", type=int, default=8768)
     ap.add_argument("--no-browser", action="store_true")
     a = ap.parse_args()
     if a.verdicts:
