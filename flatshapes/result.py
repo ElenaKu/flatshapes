@@ -57,5 +57,17 @@ def outline_metrics(mask, hidden, model_pts):
     return dict(mean=float(d.mean()), p80=float(np.percentile(d, 80)), max=float(d.max()), visible=float(vis.mean()))
 
 
+def eq_radius(mask):
+    """Equivalent radius sqrt(area / pi) of a mask: the size used for size-relative tolerances."""
+    return float(np.sqrt(np.count_nonzero(mask) / np.pi))
+
+
+def limit(abs_px, rel, size, cap=1.5):
+    """Tolerance in px: the absolute limit, or `rel` times the shape size when that is larger, but at most `cap`
+    times the absolute limit. Edges of generated and hand-drawn art wobble by a share of the shape size, so a
+    40 px dot gets more slack than a 6 px one; the cap keeps big shapes (letters) from passing as polygons."""
+    return max(float(abs_px), min(float(rel) * float(size), cap * float(abs_px)))
+
+
 def fmt(p):
     return f"{p[0]:.2f} {p[1]:.2f}"

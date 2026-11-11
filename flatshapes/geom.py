@@ -86,6 +86,74 @@ def _try_arc(P, tol, min_turn_deg=6.0, r_max=5000.0):
     return ("A", p0.copy(), p1.copy(), float(r), large, sweep, c.copy()), err
 
 
+def _fits_line_or_arc(P, line_tol, arc_tol):
+    if len(P) == 2 or _line_err(P) <= line_tol:
+        return ("L", P[0].copy(), P[-1].copy())
+    a = _try_arc(P, arc_tol)
+    return a[0] if a is not None else None
+
+
+def _line_arc_runs(P, line_tol, arc_tol, max_runs=5, min_pts=3):
+    """Cover P with a few straight and circular runs ("straight - rounded corner - straight", "arc - line - arc"),
+    each as long as possible (greedy, exponential then binary search for the run end). Returns the segments when
+    at most `max_runs` are needed and the runs meet without a kink, else None (the caller falls back to Beziers).
+    This keeps exact arcs inside a boundary piece instead of approximating the whole piece with cubics."""
+    n = len(P)
+    if n < 2 * min_pts + 1:
+        return None
+    segs, i = [], 0
+    while i < n - 1:
+        if len(segs) >= max_runs:
+            return None
+        lo, step, hi = min(i + 1, n - 1), 2, None
+        if _fits_line_or_arc(P[i:lo + 1], line_tol, arc_tol) is None:
+            return None
+        while True:  # grow until it stops fitting
+            j = min(n - 1, i + step)
+            if _fits_line_or_arc(P[i:j + 1], line_tol, arc_tol) is not None:
+                lo = j
+                if j == n - 1:
+                    break
+                step *= 2
+            else:
+                hi = j
+                break
+        while hi is not None and hi - lo > 1:  # binary search between last fit and first failure
+            mid = (lo + hi) // 2
+            if _fits_line_or_arc(P[i:mid + 1], line_tol, arc_tol) is not None:
+                lo = mid
+            else:
+                hi = mid
+        if lo - i < min_pts and lo < n - 1:
+            return None  # tiny pieces: this is a free curve, not lines and arcs
+        segs.append(_fits_line_or_arc(P[i:lo + 1], line_tol, arc_tol))
+        i = lo
+    if len(segs) < 2:
+        return None
+    for a, b in zip(segs, segs[1:]):  # neighbouring runs must be (nearly) tangent
+        if np.degrees(np.arccos(np.clip(_seg_end_dir(a) @ _seg_start_dir(b), -1, 1))) > 12:
+            return None
+    return segs
+
+
+def _seg_start_dir(sg):
+    if sg[0] == "L":
+        return _unit(sg[2] - sg[1])
+    c, p = sg[6], sg[1]
+    r = p - c
+    t = np.array([-r[1], r[0]]) if sg[5] == 1 else np.array([r[1], -r[0]])
+    return _unit(t)
+
+
+def _seg_end_dir(sg):
+    if sg[0] == "L":
+        return _unit(sg[2] - sg[1])
+    c, p = sg[6], sg[2]
+    r = p - c
+    t = np.array([-r[1], r[0]]) if sg[5] == 1 else np.array([r[1], -r[0]])
+    return _unit(t)
+
+
 # ---------------------------------------------------------------- Schneider cubic fit
 
 def _bez(c, t):
@@ -173,6 +241,9 @@ def _fit(P, t1, t2, tol, line_tol, arc_tol, depth=0):
     res = _fit_cubic(P, t1, t2, tol)
     if res[0] is not None:
         return res[0]
+    la = _line_arc_runs(P, line_tol, arc_tol)
+    if la is not None:
+        return la
     split = res[2]
     split = max(2, min(split, n - 3)) if n >= 6 else n // 2
     if n < 6 or depth > 40:

@@ -5,7 +5,7 @@ are fitted, so an ellipse partly hidden by an object in front is still found.
 """
 import numpy as np
 
-from .result import ShapeFit, outline_points, fmt
+from .result import ShapeFit, outline_points, fmt, limit
 
 K_ARC = 0.5522847498
 
@@ -39,7 +39,7 @@ def _dist_to_ellipse(P, c, a, b, theta, n=720):
 
 
 def fit_ellipse(mask, hidden=None, min_axis=2.0, max_mean=0.5, max_p80=1.0, min_visible=0.4, max_gap_deg=200.0,
-                max_aspect=6.0):
+                max_aspect=6.0, rel_mean=0.022, rel_p80=0.035):
     """Ellipse fitted to the visible outline of one shape mask. Returns ShapeFit(kind="ellipse") or None.
     params: cx, cy, a, b (semi-axes), theta (radians). A very long thin shape (a line, a stroke; axis ratio above
     max_aspect) is not an ellipse."""
@@ -60,7 +60,8 @@ def fit_ellipse(mask, hidden=None, min_axis=2.0, max_mean=0.5, max_p80=1.0, min_
     if np.degrees(np.diff(np.r_[a_, a_[0] + 2 * np.pi]).max()) > max_gap_deg:
         return None
     dd = _dist_to_ellipse(Pv, (cx, cy), a, b, th)
-    if dd.mean() > max_mean or np.percentile(dd, 80) > max_p80:
+    size = float(np.sqrt(a * b))
+    if dd.mean() > limit(max_mean, rel_mean, size) or np.percentile(dd, 80) > limit(max_p80, rel_p80, size):
         return None
     M = np.zeros((h, w), np.uint8)
     cv2.ellipse(M, ((cx, cy), (W, H), ang), 1, -1)

@@ -12,7 +12,7 @@ Ported from flat2svg core v2 (core2/stars.py).
 """
 import numpy as np
 
-from .result import ShapeFit, outline_metrics
+from .result import ShapeFit, outline_metrics, eq_radius, limit
 
 def _bez(p0, p1, p2, p3, t):
     t = t[:, None]
@@ -183,20 +183,23 @@ def _fit_star(K, occ, off, size, min_ratio, max_mean, max_p80, best_share, k_ran
 
 
 def fit_star(mask, hidden=None, min_ratio=1.5, max_mean=0.7, max_p80=1.5, best_share=0.85, k_range=(4, 8),
-             max_area_err=0.06):
+             max_area_err=0.06, rel_mean=0.022, rel_p80=0.035):
     """Fit a star to one binary shape mask (H, W). `hidden`: optional bool mask of outline that must be ignored.
     Returns ShapeFit(kind="star") or None.
 
     min_ratio:   a tip lies at least min_ratio * (inscribed radius) from the centre
     max_mean:    mean outline distance (px) over the best `best_share` of the visible points
     max_p80:     80th percentile of the outline distance (px)
+    rel_mean, rel_p80: the two distance limits grow with the size (equivalent radius of the mask)
     max_area_err: share of pixels that differ by more than 1 px from the model edge (outside hidden areas)
     """
     import cv2
     K = np.asarray(mask, bool)
     h, w = K.shape
     occ = np.zeros((h, w), bool) if hidden is None else np.asarray(hidden, bool)
-    res = _fit_star(K, occ, (0, 0), (w, h), min_ratio, max_mean, max_p80, best_share, k_range)
+    R = eq_radius(K)
+    res = _fit_star(K, occ, (0, 0), (w, h), min_ratio, limit(max_mean, rel_mean, R), limit(max_p80, rel_p80, R),
+                    best_share, k_range)
     if res is None:
         return None
     C, T, b, M = res

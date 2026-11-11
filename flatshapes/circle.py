@@ -5,7 +5,7 @@ Ported from flat2svg core v2 (core2/stage3.py, core2/primitives.py, core2/stars.
 """
 import numpy as np
 
-from .result import ShapeFit, outline_points, fmt
+from .result import ShapeFit, outline_points, fmt, limit
 
 K_ARC = 0.5522847498  # cubic Bezier control distance for a quarter circle
 
@@ -67,10 +67,10 @@ def circle_path(cx, cy, r):
 
 
 def fit_circle(mask, hidden=None, min_r=3.0, max_mean=0.45, max_p80=0.9, best_share=0.9, min_visible=0.3,
-               max_gap_deg=200.0):
+               max_gap_deg=200.0, rel_mean=0.022, rel_p80=0.035):
     """Circle fitted to the visible outline of one shape mask. Returns ShapeFit(kind="circle") or None.
     The visible outline must go round the circle (largest angular gap <= max_gap_deg): a straight edge is not a
-    circle."""
+    circle. Error limits grow with the radius: max(max_mean, rel_mean * r), max(max_p80, rel_p80 * r)."""
     import cv2
     from scipy.optimize import least_squares
     K = np.asarray(mask, bool)
@@ -86,7 +86,7 @@ def fit_circle(mask, hidden=None, min_r=3.0, max_mean=0.45, max_p80=0.9, best_sh
     cx, cy, r = least_squares(res, np.array(f0), loss="soft_l1", f_scale=0.5).x
     dd = np.abs(res((cx, cy, r)))
     best = np.sort(dd)[: max(1, int(len(dd) * best_share))]
-    if r < min_r or best.mean() > max_mean or np.percentile(dd, 80) > max_p80:
+    if r < min_r or best.mean() > limit(max_mean, rel_mean, r) or np.percentile(dd, 80) > limit(max_p80, rel_p80, r):
         return None
     if 360.0 - coverage_deg(Pv, (cx, cy)) > max_gap_deg:
         return None

@@ -84,23 +84,17 @@ def run_detect(req):
     labels, cols, bg = get_labels(req["path"], int(s.get("colors", 8)), float(s.get("merge_de", 10)))
     opts = {k: req.get("options", {}).get(k, {}) for k in KINDS}
     kinds = tuple(k for k in KINDS if req.get("enabled", {}).get(k, True))
+    lines = []
+    if req.get("enabled", {}).get("line", True):
+        lo = req.get("options", {}).get("line", {})
+        kw = {k: lo[k] for k in ("max_angle", "max_offset", "max_gap", "min_len", "max_width", "body_r") if k in lo}
+        lines = fs.find_lines(labels, background=bg, **kw)
     found = fs.detect_shapes(labels, background=bg, min_area=int(s.get("min_area", 60)), rim=int(s.get("rim", 4)),
-                             underlay_share=float(s.get("underlay", 0.5)),
+                             underlay_share=float(s.get("underlay", 0.5)), lines=lines,
                              kinds=kinds, slack=float(s.get("slack", 0.15)), options=opts,
                              colours={i: cols[i] for i in range(len(cols))}) if kinds else []
     shapes = [_shape_json(f, lab, f"s{n}") for n, (lab, _, f) in enumerate(found)]
-    if req.get("enabled", {}).get("line", True):
-        lo = req.get("options", {}).get("line", {})
-        merge_kw = {k: lo[k] for k in ("max_angle", "max_offset", "max_gap") if k in lo}
-        det_kw = {k: lo[k] for k in ("min_len", "max_width", "body_r") if k in lo}
-        n = 0
-        for lab in range(len(cols)):
-            if lab == bg:
-                continue
-            for f in fs.detect_lines(labels == lab, **det_kw, **merge_kw):
-                if fs.same_sides(f, labels):
-                    shapes.append(_shape_json(f, lab, f"l{n}"))
-                    n += 1
+    shapes += [_shape_json(f, lab, f"l{n}") for n, (lab, f) in enumerate(lines)]
     h, w = labels.shape
     return dict(shapes=shapes, width=w, height=h, background=bg,
                 palette=[_lab_to_hex(c) for c in cols])

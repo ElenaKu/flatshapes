@@ -87,12 +87,9 @@ def process(path, out_base, args):
         print(f"skip (unreadable): {path}")
         return None
     labels, cols, bg = quantize(bgr, args.colors)
-    found = fs.detect_shapes(labels, background=bg, min_area=args.min_area,
+    lines = fs.find_lines(labels, background=bg, min_len=args.min_line)
+    found = fs.detect_shapes(labels, background=bg, min_area=args.min_area, lines=lines,
                              colours={i: cols[i] for i in range(len(cols))})
-    lines = []
-    for lab in range(len(cols)):
-        if lab != bg:
-            lines += [(lab, f) for f in fs.detect_lines(labels == lab, min_len=args.min_line) if fs.same_sides(f, labels)]
     vis = (bgr * 0.55).astype(np.uint8)
     rows = []
     for lab, _, f in found:
