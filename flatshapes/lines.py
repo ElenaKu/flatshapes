@@ -15,6 +15,28 @@ def _seg_dir(s):
     return d / n if n > 1e-9 else np.array([1.0, 0.0])
 
 
+def _try_merge(a, b, max_angle, max_offset, max_gap, noisy_len):
+    """Merged segment of pieces a and b when they lie on one line, else None."""
+    da, db = a[1] - a[0], b[1] - b[0]
+    la, lb = float(np.hypot(*da)), float(np.hypot(*db))
+    if la < 1e-9 or lb < 1e-9:
+        return None
+    da, db = da / la, db / lb
+    lim = max(max_angle, np.degrees(np.arctan2(noisy_len, min(la, lb))))
+    if np.degrees(np.arccos(min(1.0, abs(float(da @ db))))) > lim:
+        return None
+    u, base = (da, a[0]) if la >= lb else (db, b[0])
+    nrm = np.array([-u[1], u[0]])
+    if max(abs(float((p - base) @ nrm)) for p in (a[0], a[1], b[0], b[1])) > max_offset:
+        return None
+    ta = sorted(float((p - base) @ u) for p in a)
+    tb = sorted(float((p - base) @ u) for p in b)
+    if max(ta[0], tb[0]) - min(ta[1], tb[1]) > max_gap:
+        return None
+    t = ta + tb
+    return (base + min(t) * u, base + max(t) * u)
+
+
 def merge_collinear(segments, max_angle=4.0, max_offset=2.0, max_gap=90.0, noisy_len=3.0):
     """Join pieces of one straight line. segments: list of (p0, p1) arrays (2,) each.
     Two pieces join when their directions differ by <= max_angle degrees (wider for short pieces, whose direction
@@ -22,38 +44,21 @@ def merge_collinear(segments, max_angle=4.0, max_offset=2.0, max_gap=90.0, noisy
     them along the line is <= max_gap px. Returns the merged list of (p0, p1)."""
     segs = [(np.asarray(a, float), np.asarray(b, float)) for a, b in segments]
     changed = True
-    while changed:
+    while changed:  # passes over all pairs; a merged piece keeps absorbing in the same pass
         changed = False
+        alive = [True] * len(segs)
         for i in range(len(segs)):
+            if not alive[i]:
+                continue
             for j in range(i + 1, len(segs)):
-                a, b = segs[i], segs[j]
-                la, lb = np.linalg.norm(a[1] - a[0]), np.linalg.norm(b[1] - b[0])
-                da, db = _seg_dir(a), _seg_dir(b)
-                lim = max(max_angle, np.degrees(np.arctan2(noisy_len, max(1e-6, min(la, lb)))))
-                cos = abs(float(da @ db))
-                if np.degrees(np.arccos(min(1.0, cos))) > lim:
+                if not alive[j]:
                     continue
-                u = da if la >= lb else db
-                if float(da @ db) < 0 and la < lb:
-                    u = db
-                nrm = np.array([-u[1], u[0]])
-                base = a[0] if la >= lb else b[0]
-                off = [abs(float((p - base) @ nrm)) for p in (*a, *b)]
-                if max(off) > max_offset:
-                    continue
-                ta = sorted(float((p - base) @ u) for p in a)
-                tb = sorted(float((p - base) @ u) for p in b)
-                gap = max(ta[0], tb[0]) - min(ta[1], tb[1])
-                if gap > max_gap:
-                    continue
-                t = ta + tb
-                lo, hi = min(t), max(t)
-                segs[i] = (base + lo * u, base + hi * u)
-                segs.pop(j)
-                changed = True
-                break
-            if changed:
-                break
+                m = _try_merge(segs[i], segs[j], max_angle, max_offset, max_gap, noisy_len)
+                if m is not None:
+                    segs[i] = m
+                    alive[j] = False
+                    changed = True
+        segs = [sg for sg, ok in zip(segs, alive) if ok]
     return segs
 
 

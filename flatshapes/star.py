@@ -149,7 +149,9 @@ def _fit_star(K, occ, off, size, min_ratio, max_mean, max_p80, best_share, k_ran
                     T[i] = Cp + (T[i] - Cp) * (rad[j] / rad[i])
                     hid[i] = True
     T0 = np.array(T)
-    Pv = P[vis]
+    Pv_all = P[vis]
+    # the fit runs on at most 400 outline points (the acceptance check below uses all of them)
+    Pv = Pv_all[:: max(1, len(Pv_all) // 400)]
     wt = np.where(hid, 5.0, 0.05)  # a tip put back under a line has nothing to hold it: keep it where symmetry says
 
     def unpack(x):
@@ -163,15 +165,24 @@ def _fit_star(K, occ, off, size, min_ratio, max_mean, max_p80, best_share, k_ran
         prior_b = 0.5 * (b - b.mean())
         return np.r_[dd, prior_t, prior_b]
 
-    x0v = np.r_[C0, T0.ravel(), np.full(k, 0.5)]
+    # quick reject before the optimiser: with the start tips and the best common bend the outline must already be
+    # roughly right (letters and blobs with a few spikes stop here)
+    pre = []
+    for bb in (0.15, 0.35, 0.55, 0.75, 0.9):
+        dd0, _ = cKDTree(_model(C0, T0, np.full(k, bb), 20)).query(Pv)
+        pre.append((float(np.sort(dd0)[: max(1, int(len(dd0) * best_share))].mean()), bb))
+    pre_err, b0 = min(pre)
+    if pre_err > 6 * max_mean + 1.0:
+        return None
+    x0v = np.r_[C0, T0.ravel(), np.full(k, 0.5)]  # (starting from b0 lands in worse local minima)
     lo = np.r_[np.full(2 + 2 * k, -np.inf), np.zeros(k)]
     hi = np.r_[np.full(2 + 2 * k, np.inf), np.full(k, 0.98)]
     try:
-        sol = least_squares(resid, x0v, bounds=(lo, hi), loss="soft_l1", f_scale=1.0, max_nfev=200)
+        sol = least_squares(resid, x0v, bounds=(lo, hi), loss="soft_l1", f_scale=1.0, max_nfev=120)
     except Exception:
         return None
     C, T_, b = unpack(sol.x)
-    dd, _ = cKDTree(_model(C, T_, b, 80)).query(Pv)
+    dd, _ = cKDTree(_model(C, T_, b, 80)).query(Pv_all)
     # a few outline points may belong to a line stub glued to the star: judged on the best 90%
     ds = np.sort(dd)[: max(1, int(len(dd) * best_share))]
     if ds.mean() > max_mean or np.percentile(dd, 80) > max_p80:

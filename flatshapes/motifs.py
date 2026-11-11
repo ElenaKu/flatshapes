@@ -160,6 +160,36 @@ def find_motifs(labels, background=None, min_area=60, same_colour=True, allow_sc
     return motifs
 
 
+def _shrink(img, d):
+    """Area-average downscale by an integer factor d (1 = unchanged)."""
+    import cv2
+    if d <= 1:
+        return img
+    h, w = img.shape
+    return cv2.resize(img, (max(1, w // d), max(1, h // d)), interpolation=cv2.INTER_AREA)
+
+
+def _place_scores(region, todo, band, vis, tm, edge, min_inside, min_edge):
+    """Score of every placement of template tm (filled) / edge (its outline) over a region: on_edge^4 *
+    sqrt(new share), -1 where the copy sticks out (inside < min_inside), adds little (< 25 % new) or does not
+    follow the outline (on_edge < min_edge). Returns (score map, inside map) or (None, None) if it does not fit."""
+    import cv2
+    th, tw = tm.shape
+    if th > region.shape[0] or tw > region.shape[1]:
+        return None, None
+    ta = float(tm.sum())
+    inside = cv2.matchTemplate(region, tm, cv2.TM_CCORR) / ta
+    new = cv2.matchTemplate(todo, tm, cv2.TM_CCORR)
+    # a true copy runs along the region outline (except where another copy overlaps it); a copy placed across
+    # two stuck copies sits inside them. Judged on the copy's outline that is not hidden.
+    e_vis = cv2.matchTemplate(vis, edge, cv2.TM_CCORR)
+    on_edge = cv2.matchTemplate(band, edge, cv2.TM_CCORR) / np.maximum(e_vis, 1e-6)
+    on_edge[e_vis < 0.5 * float(edge.sum())] = 0  # mostly hidden: no evidence
+    score = on_edge ** 4 * np.sqrt(np.clip(new / ta, 0, 1))
+    score[(inside < min_inside) | (new < 0.25 * ta) | (on_edge < min_edge)] = -1
+    return score, inside
+
+
 def _template_raster(P, angle, scale, mirrored):
     """Filled template (outline P around its centroid) transformed; returns mask and centroid position in it."""
     import cv2
@@ -176,7 +206,8 @@ def _template_raster(P, angle, scale, mirrored):
     return m, -lo
 
 
-def split_merged(motifs, regions, min_inside=0.92, min_cover=0.85, angle_step=10.0, scale_steps=(0.9, 1.0, 1.1),
+def split_merged(motifs, regions, min_inside=0.92, min_cover=0.85, coarse_step=15.0, fine_step=5.0,
+                 coarse_size=14.0, n_refine=3, scale_steps=(0.9, 1.0, 1.1),
                  max_copies=6, area_range=(0.6, 6.0), min_edge=0.65, image_shape=None):
     """Explain a region as copies of a known motif stuck together. regions: (label, index, mask crop, x0, y0) of
     the components that matched no motif, optionally with a 6th item: hidden crop (outline covered by objects in
@@ -187,6 +218,8 @@ def split_merged(motifs, regions, min_inside=0.92, min_cover=0.85, angle_step=10
     e.g. a string) adds its copies to the motif (split=True). Returns the number of copies added.
     A copy must run along the region outline for at least min_edge of its own outline. Motifs that are plain
     triangles / quadrilaterals are not used: they tile any bar or band (a ribbon would be cut into pieces).
+    Search: coarse_step-degree angles on images shrunk so the motif is ~coarse_size px in radius, the best
+    n_refine placements refined at full size with fine_step-degree angles.
     image_shape (H, W): where a region touches the image border, copies may extend past it (cut-off copies)."""
     import cv2
     added = 0
@@ -207,13 +240,31 @@ def split_merged(motifs, regions, min_inside=0.92, min_cover=0.85, angle_step=10
         turn = 360.0 if sy.round else 360.0 / max(1, sy.order)
         if sy.axes:
             mirrors = (False,)
-        rasters = []
-        for sc in scales:
+        # coarse to fine: all placements are scored on images shrunk by `d` with angles every coarse_step degrees,
+        # the best few are refined at full size near their spot with angles every fine_step degrees
+        d = max(1, int(round(T["r"] * min(scales) / coarse_size)))
+        angles = [0.0] if sy.round else list(np.arange(0, turn, coarse_step))
+        full_cache = {}
+
+        def full_raster(a, sc, mi):
+            key = (round(a % 360, 3), sc, mi)
+            if key not in full_cache:
+                tm, off = _template_raster(T["outline"], a, sc, mi)
+                edge = (tm - cv2.erode(tm, np.ones((3, 3), np.uint8))).astype(np.float32)
+                full_cache[key] = (tm, off, edge)
+            return full_cache[key]
+
+        coarse = []
+        base_scales = sorted({round(it["scale"] * 20) / 20 for it in mo.instances})  # refine tries scale_steps
+        for sc in base_scales:
             for mi in mirrors:
-                for a in (np.arange(0, turn, angle_step) if not sy.round else [0.0]):
-                    tm, off = _template_raster(T["outline"], a, sc, mi)
-                    edge = (tm - cv2.erode(tm, np.ones((3, 3), np.uint8))).astype(np.float32)
-                    rasters.append((a, sc, mi, tm, off, edge))
+                for a in angles:
+                    tm, _, _ = full_raster(a, sc, mi)
+                    tl = _shrink(tm.astype(np.float32), d)
+                    tb = (tl > 0.5).astype(np.uint8)
+                    el = (tb - cv2.erode(tb, np.ones((3, 3), np.uint8))).astype(np.float32)
+                    if tl.sum() > 0 and el.sum() > 0:
+                        coarse.append((a, sc, mi, tl, el))
         for reg in regions:
             lab, idx, m, x0, y0 = reg[:5]
             hid = reg[5] if len(reg) > 5 and reg[5] is not None else np.zeros_like(m)
@@ -237,40 +288,55 @@ def split_merged(motifs, regions, min_inside=0.92, min_cover=0.85, angle_step=10
             m8 = m.astype(np.uint8)
             band = (cv2.dilate(m8 - cv2.erode(m8, np.ones((3, 3), np.uint8)), np.ones((5, 5), np.uint8)) > 0) & ~hid
             vis = (~hid).astype(np.float32)
+            region_l, vis_l = _shrink(region, d), _shrink(vis, d)
             todo = m.copy()
             copies = []
             while len(copies) < max_copies and todo.sum() > (1 - min_cover) * area:
-                best = None
                 todo_f = todo.astype(np.float32)
                 # outline of a copy behind copies already placed is not visible: it counts as matching there
                 band_now = (band | (~todo & m)).astype(np.float32)
-                for a, sc, mi, tm, off, edge in rasters:
-                    th, tw = tm.shape
-                    if th > m.shape[0] or tw > m.shape[1]:
+                todo_l, band_l = _shrink(todo_f, d), np.minimum(1.0, _shrink(band_now, d) * 2)
+                cands = []
+                for a, sc, mi, tl, el in coarse:
+                    sc_map, _ = _place_scores(region_l, todo_l, band_l, vis_l, tl, el, min_inside - 0.1,
+                                              min_edge - 0.2)
+                    if sc_map is None:
                         continue
-                    tf = tm.astype(np.float32)
-                    ta = float(tf.sum())
-                    inside = cv2.matchTemplate(region, tf, cv2.TM_CCORR) / ta
-                    new = cv2.matchTemplate(todo_f, tf, cv2.TM_CCORR)
-                    # a true copy runs along the region outline (except where another copy overlaps it); a copy
-                    # placed across two stuck copies (a balloon lying across two balloons) sits inside them
-                    # judged on the copy's outline that is not hidden (under objects in front, past the border)
-                    e_vis = cv2.matchTemplate(vis, edge, cv2.TM_CCORR)
-                    on_edge = cv2.matchTemplate(band_now, edge, cv2.TM_CCORR) / np.maximum(e_vis, 1.0)
-                    on_edge[e_vis < 0.5 * float(edge.sum())] = 0  # mostly hidden: no evidence
-                    score = on_edge ** 4 * np.sqrt(np.clip(new / ta, 0, 1))
-                    score[(inside < min_inside) | (new < 0.25 * ta) | (on_edge < min_edge)] = -1
-                    k = int(np.argmax(score))
-                    yy, xx = divmod(k, score.shape[1])
-                    if score[yy, xx] > 0 and (best is None or score[yy, xx] > best[0]):
-                        best = (float(score[yy, xx]), a, sc, mi, xx, yy, tm, off, float(inside[yy, xx]))
+                    k = int(np.argmax(sc_map))
+                    yy, xx = divmod(k, sc_map.shape[1])
+                    if sc_map[yy, xx] > 0:
+                        cands.append((float(sc_map[yy, xx]), a, sc, mi, xx * d, yy * d))
+                cands.sort(key=lambda c: -c[0])
+                best = None
+                tries = []
+                for _, a0, sc0, mi, X, Y in cands[:n_refine]:
+                    for sc in (round(sc0 * f, 3) for f in scale_steps):
+                        for a in ([a0] if sy.round else a0 + np.arange(-coarse_step / 2, coarse_step / 2 + 1e-6, fine_step)):
+                            tries.append((a, sc, mi, X, Y))
+                for a, sc, mi, X, Y in tries:
+                    tm, off, edge = full_raster(a, sc, mi)
+                    th, tw = tm.shape
+                    r0, c0 = max(0, Y - 2 * d - 2), max(0, X - 2 * d - 2)
+                    r1, c1 = min(m.shape[0], Y + 2 * d + 3 + th), min(m.shape[1], X + 2 * d + 3 + tw)
+                    if r1 - r0 < th or c1 - c0 < tw:
+                        continue
+                    win = (slice(r0, r1), slice(c0, c1))
+                    sc_map, inside = _place_scores(region[win], todo_f[win], band_now[win], vis[win],
+                                                   tm.astype(np.float32), edge, min_inside, min_edge)
+                    if sc_map is None:
+                        continue
+                    k = int(np.argmax(sc_map))
+                    yy, xx = divmod(k, sc_map.shape[1])
+                    if sc_map[yy, xx] > 0 and (best is None or sc_map[yy, xx] > best[0]):
+                        best = (float(sc_map[yy, xx]), float(a % 360), sc, mi, xx + c0, yy + r0, tm, off,
+                                float(inside[yy, xx]))
                 if best is None:
                     break
                 _, a, sc, mi, xx, yy, tm, off, ins = best
                 th, tw = tm.shape
                 todo[yy:yy + th, xx:xx + tw] &= ~tm.astype(bool)
                 copies.append(dict(label=lab, index=idx, cx=float(x0 + xx + off[0]), cy=float(y0 + yy + off[1]),
-                                   angle=float(a), scale=float(sc), mirrored=bool(mi), iou=round(ins, 4), split=True))
+                                   angle=round(a, 2), scale=float(sc), mirrored=bool(mi), iou=round(ins, 4), split=True))
             if copies and todo.sum() <= (1 - min_cover) * area:
                 mo.instances.extend(copies)
                 added += len(copies)
