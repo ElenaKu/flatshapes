@@ -5,7 +5,7 @@
 <title>flatshapes test bench</title>
 <style>
   :root { --bg:#16171a; --panel:#1f2024; --line:#33353b; --text:#e6e6e6; --dim:#9a9ca3; --acc:#e0b04c;
-          --ok:#4cd07d; --bad:#ff5a5a; --circle:#00e5ff; --ellipse:#3d7bff; --polygon:#22c55e; --star:#ff3df2; --line-k:#ff9a1f; }
+          --ok:#4cd07d; --bad:#ff5a5a; --circle:#00e5ff; --ellipse:#3d7bff; --polygon:#22c55e; --star:#ff3df2; --line-k:#ff9a1f; --motif:#ffe14d; --sym:#7dffb0; }
   * { box-sizing:border-box; }
   body { margin:0; font:13px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--text); height:100vh;
          display:grid; grid-template-columns:240px 1fr 330px; grid-template-rows:auto 1fr; }
@@ -73,7 +73,8 @@
   <div id="panelVerdicts" style="display:none"></div>
 </div>
 <script>
-const KINDS = ["circle", "ellipse", "polygon", "star", "line"];
+const KINDS = ["circle", "ellipse", "polygon", "star", "line", "motif"];
+const SHAPE_KINDS = ["circle", "ellipse", "polygon", "star", "line"];
 const KCOL = k => getComputedStyle(document.documentElement).getPropertyValue(k === "line" ? "--line-k" : "--" + k).trim();
 // slider definitions: [key, label, min, max, step, default]
 const SETTINGS = {
@@ -94,6 +95,10 @@ const SETTINGS = {
   line:    [["min_len", "min length px", 5, 200, 1, 20], ["max_width", "max width px", 1, 30, 0.5, 9],
             ["body_r", "body radius px", 1, 12, 0.5, 4], ["max_angle", "join angle °", 0, 15, 0.5, 4],
             ["max_offset", "join offset px", 0, 8, 0.5, 2], ["max_gap", "join gap px", 0, 300, 5, 90]],
+  motif:   [["min_iou", "overlay IoU ≥", 0.5, 1, 0.01, 0.85], ["sig_tol", "signature tol", 0.01, 0.3, 0.01, 0.08],
+            ["same_colour", "same colour (0/1)", 0, 1, 1, 1], ["allow_scale", "allow scale (0/1)", 0, 1, 1, 1],
+            ["allow_mirror", "allow mirror (0/1)", 0, 1, 1, 1]],
+  symmetry:[["rot_iou", "rotation IoU ≥", 0.5, 1, 0.01, 0.9], ["mirror_iou", "mirror IoU ≥", 0.5, 1, 0.01, 0.9]],
 };
 const S = { images: [], cur: -1, data: null, sel: null, verd: { marks: [], missed: [] }, mode: "inspect",
             missedKind: "circle", show: Object.fromEntries(KINDS.map(k => [k, true])), panel: "settings",
@@ -131,10 +136,11 @@ function countKinds(d) { const c = {}; for (const s of (d ? d.shapes : [])) c[s.
 function drawHeader() {
   tabs($("modeTabs"), [["inspect", "Inspect"], ["missed", "Mark missed"]], k => S.mode === k, k => { S.mode = k; drawHeader(); });
   $("missedTabs").style.display = S.mode === "missed" ? "flex" : "none";
-  tabs($("missedTabs"), KINDS.map(k => [k, k, KCOL(k)]), k => S.missedKind === k, k => { S.missedKind = k; drawHeader(); }, "kind");
+  tabs($("missedTabs"), SHAPE_KINDS.map(k => [k, k, KCOL(k)]), k => S.missedKind === k, k => { S.missedKind = k; drawHeader(); }, "kind");
   tabs($("kindTabs"), KINDS.map(k => [k, k, KCOL(k)]), k => S.show[k], k => { S.show[k] = !S.show[k]; drawHeader(); drawShapes(); }, "kind");
   if (S.data) {
     const c = {}; for (const s of S.data.shapes) c[s.kind] = (c[s.kind] || 0) + 1;
+    if (S.data.motifs && S.data.motifs.length) c.motif = S.data.motifs.length + " groups / " + S.data.motifs.reduce((a, m) => a + m.count, 0) + " copies";
     $("counts").textContent = KINDS.filter(k => c[k]).map(k => `${k} ${c[k]}`).join(" · ") || "nothing found";
   }
 }
@@ -168,7 +174,7 @@ function drawSettings() {
   tabs(gt, Object.keys(SETTINGS).map(g => [g, g]), g => S.group === g, g => { S.group = g; drawSettings(); });
   const body = document.createElement("section"); el.appendChild(body);
   const g = S.group;
-  if (g !== "general") {
+  if (g !== "general" && g !== "symmetry") {
     const en = document.createElement("div"); en.className = "tabs"; en.style.marginBottom = "6px"; body.appendChild(en);
     tabs(en, [["on", "enabled"], ["off", "disabled"]], k => (k === "on") === S.enabled[g],
          k => { S.enabled[g] = k === "on"; drawSettings(); changed(); });
@@ -206,7 +212,7 @@ function changed() {
   clearTimeout(tChange); tChange = setTimeout(() => detect(false, true), 350);
 }
 function reqBase() {
-  const options = {}; for (const k of KINDS) options[k] = S.values[k];
+  const options = {}; for (const k of [...KINDS, "symmetry"]) options[k] = S.values[k];
   return { path: S.images[S.cur], settings: S.values.general, options, enabled: S.enabled };
 }
 
@@ -244,6 +250,21 @@ function drawShapes() {
     p.style.cursor = "pointer"; p.dataset.id = s.id; p.style.pointerEvents = "visibleStroke";
     if (m) el("text", { x: s.centre[0], y: s.centre[1] + 5 * px(), "font-size": 14 * px(), "text-anchor": "middle",
                         fill: m.verdict === "correct" ? "#4cd07d" : "#ff5a5a", "font-weight": "bold" }, g).textContent = m.verdict === "correct" ? "✓" : "✗";
+  }
+  if (S.show.motif && S.data.motifs) S.data.motifs.forEach((mo, gi) => {
+    for (const it of mo.instances) {
+      el("path", { d: "M" + it.pts.map(p => p.join(",")).join("L") + "Z", fill: "none", stroke: KCOL("motif"),
+                   "stroke-width": lw, "stroke-dasharray": it.iou === 1 ? "" : `${5 * px()} ${3 * px()}` }, g).style.pointerEvents = "none";
+      el("text", { x: it.cx, y: it.cy + 4 * px(), "font-size": 12 * px(), "text-anchor": "middle", fill: KCOL("motif"),
+                   "font-weight": "bold" }, g).textContent = "M" + (gi + 1) + (it.mirrored ? "↔" : "");
+    }
+  });
+  if (S.inspect && S.inspect.symmetry && S.panel === "inspector") {
+    const sy = S.inspect.symmetry, [cx, cy] = sy.centre, L = 0.6 * Math.hypot(S.inspect.bbox[2] - S.inspect.bbox[0], S.inspect.bbox[3] - S.inspect.bbox[1]);
+    for (const a of sy.axes) { const t = a * Math.PI / 180, dx = Math.cos(t) * L, dy = Math.sin(t) * L;
+      el("line", { x1: cx - dx, y1: cy - dy, x2: cx + dx, y2: cy + dy, stroke: KCOL("sym"), "stroke-width": lw * 0.7, "stroke-dasharray": `${4 * px()} ${3 * px()}` }, g); }
+    if (sy.symmetrized && S.inspect.showSym)
+      el("path", { d: "M" + sy.symmetrized.map(p => p.join(",")).join("L") + "Z", fill: KCOL("sym") + "44", stroke: KCOL("sym"), "stroke-width": lw }, g);
   }
   for (const ms of S.verd.missed) {
     if (!S.show[ms.kind]) continue;
@@ -304,12 +325,23 @@ function drawInspector() {
        const extra = [m.k ? "k=" + m.k : "", mt.area_err != null ? "area " + (mt.area_err * 100).toFixed(1) + "%" : "", mt.visible != null ? "vis " + (mt.visible * 100).toFixed(0) + "%" : ""].filter(Boolean).join(" ");
        return `<tr data-k="${m.kind}" style="cursor:pointer"><td style="color:${KCOL(m.kind)}">${m.kind}</td><td>${fmtV(mt.mean)}</td><td>${fmtV(mt.p80)}</td><td class="muted">${m.note ? "no fit" : extra}</td>
                <td class="${m.passed ? "pass" : "fail"}">${m.passed ? "pass" : "fail"}</td></tr>`; }).join("")}
-    </table><div class="muted" style="margin-top:4px">Hover a row to draw that model (white dashed). Failed models are fitted with limits lifted, so you can see how far they are from passing. Compare with the limits in Settings.</div>`;
+    </table>${symBlock(I.symmetry)}<div class="muted" style="margin-top:4px">Hover a row to draw that model (white dashed). Failed models are fitted with limits lifted, so you can see how far they are from passing. Compare with the limits in Settings.</div>`;
+  const bs = sec2.querySelector("#bSym"); if (bs) bs.onclick = () => { S.inspect.showSym = !S.inspect.showSym; drawShapes(); drawInspector(); };
   sec2.querySelectorAll("tr[data-k]").forEach(tr => {
     tr.onmouseenter = () => { S.inspect.hover = tr.dataset.k; drawShapes(); };
     tr.onmouseleave = () => { S.inspect.hover = null; drawShapes(); };
     tr.onclick = () => { S.panel = "settings"; S.group = tr.dataset.k; drawPanels(); };
   });
+}
+function symBlock(sy) {
+  if (!sy) return "";
+  const names = { round: "round (every rotation fits)", none: "no symmetry", mirror: "mirror only" };
+  const k = names[sy.kind] || (sy.kind[0] === "D" ? `rotation ×${sy.order} + ${sy.axes.length} mirror axes` : `rotation ×${sy.order}, no mirror`);
+  const orders = Object.entries(sy.scores_by_order).map(([n, v]) => `<span class="${v >= (S.values.symmetry.rot_iou) ? "pass" : "muted"}">${n}:${v}</span>`).join(" ");
+  return `<h3 style="margin-top:10px">Symmetry</h3><div><b style="color:${KCOL("sym")}">${sy.kind}</b> — ${k}</div>
+    ${sy.axes.length ? `<div class="muted">axes: ${sy.axes.map((a, i) => a + "° (" + sy.mirror_scores[i] + ")").join(", ")}</div>` : ""}
+    <div class="muted" style="font-size:11px">rotation overlap by order: ${orders}</div>
+    ${sy.symmetrized ? `<button class="btn" id="bSym" style="margin-top:4px">${S.inspect.showSym ? "Hide" : "Show"} symmetrized shape</button>` : ""}`;
 }
 function fmtV(v) { if (v == null) return "–"; if (typeof v === "number") return Math.abs(v) > 1e6 ? "∞" : +v.toFixed(3);
   if (Array.isArray(v)) return JSON.stringify(v.length > 6 ? v.slice(0, 6).concat(["…"]) : v); return String(v); }

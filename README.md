@@ -20,6 +20,22 @@ What makes it different from generic detectors (OpenCV Hough, scikit-image RANSA
 
 Extracted from the `core-v2` branch of flat2svg (ElenaKu/scripts).
 
+## Symmetry and repeated motifs
+
+```python
+sym = fs.find_symmetry(mask, hidden)   # kind: "D5" (rotation x5 + mirrors), "C3", "mirror", "round", "none"
+sym.order, sym.axes                    # rotational order, mirror axes in degrees
+clean = fs.symmetrize(mask, sym)       # exactly symmetric version of a slightly uneven shape
+
+motifs = fs.find_motifs(labels, background=0)    # same shape drawn several times
+for mo in motifs:
+    mo.instances                       # cx, cy, angle, scale, mirrored, iou per copy
+svg = fs.motifs_svg(motifs, palette)   # each motif once as <symbol>, copies as <use transform=...>
+```
+
+Copies may be moved, rotated, scaled and mirrored; every match is confirmed by overlaying the transformed
+template (IoU >= 0.85).
+
 ## Install
 
 ```

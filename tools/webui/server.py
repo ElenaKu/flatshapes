@@ -95,8 +95,29 @@ def run_detect(req):
                              colours={i: cols[i] for i in range(len(cols))}) if kinds else []
     shapes = [_shape_json(f, lab, f"s{n}") for n, (lab, _, f) in enumerate(found)]
     shapes += [_shape_json(f, lab, f"l{n}") for n, (lab, f) in enumerate(lines)]
+    motifs = []
+    if req.get("enabled", {}).get("motif", True):
+        mo = req.get("options", {}).get("motif", {})
+        comps = list(fs.components(labels, bg, int(s.get("min_area", 60)), False, lines=lines))
+        for gi, m in enumerate(fs.find_motifs(labels, bg, components=comps,
+                                              min_iou=float(mo.get("min_iou", 0.85)),
+                                              sig_tol=float(mo.get("sig_tol", 0.08)),
+                                              same_colour=bool(mo.get("same_colour", 1)),
+                                              allow_scale=bool(mo.get("allow_scale", 1)),
+                                              allow_mirror=bool(mo.get("allow_mirror", 1)))):
+            T = m.template["outline"][:: max(1, len(m.template["outline"]) // 80)]
+            inst = []
+            for it in m.instances:
+                A = T.copy()
+                if it["mirrored"]:
+                    A[:, 1] = -A[:, 1]
+                t = np.radians(it["angle"])
+                R = np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
+                A = (A @ R.T) * it["scale"] + [it["cx"], it["cy"]]
+                inst.append({**{k: _jsonable(v) for k, v in it.items()}, "pts": np.round(A, 1).tolist()})
+            motifs.append(dict(id=f"m{gi}", count=m.count, instances=inst, path=m.path))
     h, w = labels.shape
-    return dict(shapes=shapes, width=w, height=h, background=bg,
+    return dict(shapes=shapes, motifs=motifs, width=w, height=h, background=bg,
                 palette=[_lab_to_hex(c) for c in cols])
 
 
@@ -144,8 +165,19 @@ def run_inspect(req):
             entry["note"] = "no model could be fitted (too few outline points, wrong number of tips/sides, ...)"
         models.append(entry)
     best = fs_detect.detect_shape(m, hid, kinds=KINDS, slack=float(s.get("slack", 0.15)), options=opts)
+    so = opts.get("symmetry", {})
+    sym = fs.find_symmetry(m, hid, rot_iou=float(so.get("rot_iou", 0.9)), mirror_iou=float(so.get("mirror_iou", 0.9)))
+    symd = dict(kind=sym.kind, order=sym.order, rot_score=round(float(sym.rot_score), 3), axes=sym.axes,
+                mirror_scores=sym.mirror_scores, centre=[sym.centre[0] + x0, sym.centre[1] + y0],
+                scores_by_order={str(k): round(float(v), 3) for k, v in sym.scores_by_order.items()})
+    if sym.kind not in ("none", "round"):
+        import cv2 as _cv
+        sm = fs.symmetrize(m, sym, hid).astype(np.uint8)
+        cs, _ = _cv.findContours(sm, _cv.RETR_EXTERNAL, _cv.CHAIN_APPROX_SIMPLE)
+        if cs:
+            symd["symmetrized"] = (max(cs, key=len).reshape(-1, 2) + [x0 + 0.5, y0 + 0.5]).tolist()
     return dict(label=lab, colour=_lab_to_hex(cols[lab]), area=int(comp.sum()), bbox=[int(x0), int(y0), int(x1), int(y1)],
-                hidden_share=float(hid.mean()), chosen=best.kind if best else None, models=models,
+                hidden_share=float(hid.mean()), chosen=best.kind if best else None, models=models, symmetry=symd,
                 min_area=int(s.get("min_area", 60)))
 
 

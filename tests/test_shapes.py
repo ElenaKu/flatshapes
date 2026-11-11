@@ -68,3 +68,27 @@ def test_open_chain_fit():
     P = np.c_[50 * np.cos(t), 50 * np.sin(t)]
     segs = fs.fit_open(P)
     assert [s[0] for s in segs] == ["A"]
+
+
+def test_symmetry():
+    s = fs.find_symmetry(syn.star(k=5))
+    assert s.kind == "D5" and len(s.axes) == 5
+    assert fs.find_symmetry(syn.sparkle(k=4)).order == 4
+    assert fs.find_symmetry(syn.circle()).kind == "round"
+
+
+def test_motifs_rotated_scaled_mirrored():
+    import cv2
+    base = np.array([(0, 0), (60, 0), (60, 15), (25, 15), (25, 45), (0, 45)], float) - [25, 20]
+    L = np.zeros((400, 400), np.uint8)
+    for cx, cy, a, sc, mir in [(80, 80, 0, 1, False), (250, 90, 40, 1, False), (100, 280, 120, 0.7, False),
+                               (280, 280, -30, 1.3, True)]:
+        P = base.copy()
+        if mir:
+            P[:, 1] *= -1
+        t = np.radians(a)
+        R = np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
+        cv2.fillPoly(L, [np.round(((P @ R.T) * sc + [cx, cy]) * 4).astype(np.int32)], 1, shift=2)
+    mos = fs.find_motifs(L, background=0)
+    assert len(mos) == 1 and mos[0].count == 4
+    assert sum(i["mirrored"] for i in mos[0].instances) == 3  # template is the mirrored copy
