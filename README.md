@@ -107,10 +107,14 @@ and `summary.csv`.
 ## Test bench (web UI)
 
 ```
-python tools/webui/server.py IMAGE_DIR [--verdicts VERDICT_DIR] [--port 8765]
+python tools/webui/server.py [IMAGE_DIR] [--verdicts VERDICT_DIR] [--port 8765]
 ```
 
-Opens a local page (http://localhost:8765, standard library server, nothing extra to install):
+On Windows just double-click `start_ui.bat`. Opens a local page (http://localhost:8765, standard library server,
+nothing extra to install):
+
+- **📁 Folder**: folder browser (drives, home, recent folders, type or paste a path) to choose the image folder;
+  the last folder is reopened on the next start
 
 - file list of IMAGE_DIR (subfolders included); detected shapes drawn over the image, kinds toggled with tabs;
   wheel to zoom, drag to pan, `F` to fit

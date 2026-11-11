@@ -50,6 +50,20 @@
   .btn.ok { border-color:var(--ok); color:var(--ok); } .btn.bad { border-color:var(--bad); color:var(--bad); }
   .muted { color:var(--dim); }
   kbd { background:#2a2b30; border:1px solid var(--line); border-radius:3px; padding:0 4px; font-size:11px; }
+  #fb { position:fixed; inset:0; background:#000a; display:none; align-items:center; justify-content:center; z-index:10; }
+  #fb.on { display:flex; }
+  #fbBox { width:min(760px, 92vw); height:min(640px, 88vh); background:var(--panel); border:1px solid var(--line);
+           border-radius:8px; display:flex; flex-direction:column; }
+  #fbBox .top { padding:10px; border-bottom:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
+  #fbPath { width:100%; padding:6px 8px; background:#121316; color:var(--text); border:1px solid var(--line); border-radius:4px; font:13px monospace; }
+  #fbList { flex:1; overflow:auto; padding:4px 0; }
+  .dir { padding:6px 12px; cursor:pointer; display:flex; gap:8px; }
+  .dir:hover { background:#2a2b30; }
+  #fbBox .bottom { padding:10px; border-top:1px solid var(--line); display:flex; gap:10px; align-items:center; }
+  .crumb { cursor:pointer; color:var(--acc); } .crumb:hover { text-decoration:underline; }
+  .btn.main { background:var(--acc); color:#111; border-color:var(--acc); font-weight:600; }
+  #files .head { padding:6px 8px; border-bottom:1px solid var(--line); display:flex; gap:6px; align-items:center; }
+  #rootName { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--dim); direction:rtl; text-align:left; }
   .sw { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:middle; margin-right:4px; }
 </style>
 </head>
@@ -64,7 +78,19 @@
   <span style="flex:1"></span>
   <span class="muted"><kbd>C</kbd> correct <kbd>X</kbd> wrong <kbd>Del</kbd> clear <kbd>←</kbd><kbd>→</kbd> image <kbd>F</kbd> fit</span>
 </header>
-<aside id="files"><input id="filter" placeholder="filter files…"><div id="fileList"></div></aside>
+<aside id="files"><div class="head"><button class="btn" id="bFolder" title="Choose image folder">📁 Folder</button><span id="rootName"></span></div>
+<input id="filter" placeholder="filter files…"><div id="fileList"></div></aside>
+<div id="fb"><div id="fbBox">
+  <div class="top">
+    <div style="display:flex;gap:8px;align-items:center"><b>Choose image folder</b><span style="flex:1"></span><button class="btn" id="fbClose">✕</button></div>
+    <div class="tabs" id="fbDrives"></div>
+    <input id="fbPath" spellcheck="false" placeholder="type or paste a folder path and press Enter">
+    <div id="fbCrumbs" class="muted"></div>
+  </div>
+  <div id="fbList"></div>
+  <div class="bottom"><span id="fbInfo" class="muted" style="flex:1"></span>
+    <button class="btn main" id="fbOpen">Open this folder</button></div>
+</div></div>
 <div id="view"><svg id="svg"></svg><div id="busy"><div class="spin"></div><div id="busyText">processing…</div></div><div id="toast"></div><div id="status">loading…</div></div>
 <div id="right">
   <section><div class="tabs" id="panelTabs"></div></section>
@@ -144,6 +170,46 @@ function drawHeader() {
     if (S.data.motifs && S.data.motifs.length) c.motif = S.data.motifs.length + " groups / " + S.data.motifs.reduce((a, m) => a + m.count, 0) + " copies";
     $("counts").textContent = KINDS.filter(k => c[k]).map(k => `${k} ${c[k]}`).join(" · ") || "nothing found";
   }
+}
+
+// ---------- folder browser ----------
+let FB = null;
+async function fbGo(path) {
+  try { FB = await api("/api/browse?path=" + encodeURIComponent(path || "")); }
+  catch (e) { $("fbInfo").innerHTML = `<span class="fail">${e.message}</span>`; return; }
+  $("fbPath").value = FB.path;
+  const sep = FB.path.includes("\\") ? "\\" : "/";
+  const parts = FB.path.split(/[\\/]/).filter(Boolean);
+  let acc = FB.path.startsWith("/") ? "/" : "";
+  $("fbCrumbs").innerHTML = "";
+  parts.forEach((p, i) => { acc += p + (i === 0 && !FB.path.startsWith("/") ? sep : (i < parts.length - 1 ? sep : ""));
+    const c = document.createElement("span"); c.className = "crumb"; c.textContent = p; const to = acc; c.onclick = () => fbGo(to);
+    $("fbCrumbs").appendChild(c); if (i < parts.length - 1) $("fbCrumbs").append(" › "); });
+  const extra = [["~", "Home", FB.home], ...FB.drives.map(d => [d, d, d]), ...FB.recent.map(r => ["r:" + r, "↺ " + r.split(/[\\/]/).filter(Boolean).slice(-2).join(sep), r])];
+  tabs($("fbDrives"), extra.map(([k, l]) => [k, l]), k => false, k => fbGo(extra.find(x => x[0] === k)[2]));
+  const list = $("fbList"); list.innerHTML = "";
+  if (FB.parent) { const d = document.createElement("div"); d.className = "dir"; d.innerHTML = "⬆ <span>..</span>"; d.onclick = () => fbGo(FB.parent); list.appendChild(d); }
+  for (const n of FB.dirs) { const d = document.createElement("div"); d.className = "dir"; d.innerHTML = `📁 <span></span>`;
+    d.querySelector("span").textContent = n; d.onclick = () => fbGo(FB.path + (FB.path.endsWith(sep) ? "" : sep) + n); list.appendChild(d); }
+  if (!FB.dirs.length) list.innerHTML += `<div class="muted" style="padding:8px 12px">no subfolders</div>`;
+  $("fbInfo").textContent = `${FB.images_here} images here · ${FB.images_total}${FB.images_total_capped ? "+" : ""} with subfolders`;
+  $("fbOpen").disabled = !FB.images_total;
+}
+function fbShow(on) { $("fb").classList.toggle("on", on); if (on) fbGo(""); }
+$("bFolder").onclick = () => fbShow(true);
+$("fbClose").onclick = () => fbShow(false);
+$("fb").onclick = ev => { if (ev.target.id === "fb") fbShow(false); };
+$("fbPath").onkeydown = ev => { if (ev.key === "Enter") fbGo($("fbPath").value.trim()); };
+$("fbOpen").onclick = async () => {
+  try { const r = await api("/api/open", { path: FB.path }); fbShow(false); applyList(r); }
+  catch (e) { $("fbInfo").innerHTML = `<span class="fail">${e.message}</span>`; }
+};
+function applyList(r) {
+  S.images = r.images; S.cur = -1; S.data = null; svg.innerHTML = ""; $("filter").value = "";
+  $("rootName").textContent = r.root || "no folder"; $("rootName").title = r.root || "";
+  drawFiles();
+  status(r.images.length ? `${r.images.length} images · verdicts → ${r.verdicts}` : (r.root ? "no images in " + r.root : "choose a folder"));
+  if (r.images.length) openImage(0);
 }
 
 // ---------- files ----------
@@ -413,6 +479,7 @@ async function detect(refit, fromSettings) {
 
 window.addEventListener("keydown", ev => {
   if (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA") return;
+  if ($("fb").classList.contains("on")) { if (ev.key === "Escape") fbShow(false); return; }
   if (ev.key === "c" || ev.key === "C") mark("correct");
   else if (ev.key === "x" || ev.key === "X") mark("wrong");
   else if (ev.key === "Delete" || ev.key === "Backspace") mark(null);
@@ -425,9 +492,7 @@ window.addEventListener("resize", () => S.vb && fit());
 
 (async () => {
   drawHeader(); drawPanels();
-  try { const r = await api("/api/list"); S.images = r.images; drawFiles();
-        status(r.images.length ? `${r.images.length} images · verdicts → ${r.verdicts}` : "no images in " + r.root);
-        if (r.images.length) openImage(0); }
+  try { const r = await api("/api/list"); applyList(r); if (!r.root) fbShow(true); }
   catch (e) { status("server error: " + e.message); }
 })();
 </script>

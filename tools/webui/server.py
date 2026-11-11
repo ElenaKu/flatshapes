@@ -1,8 +1,9 @@
 """flatshapes test UI: a local web server for trying the detectors on your images.
 
-    python tools/webui/server.py IMAGE_DIR [--verdicts VERDICT_DIR] [--port 8765]
+    python tools/webui/server.py [IMAGE_DIR] [--verdicts VERDICT_DIR] [--port 8765]
 
-Open http://localhost:8765 in a browser. IMAGE_DIR is walked recursively. Verdicts (correct / wrong shapes and
+Open http://localhost:8765 in a browser. IMAGE_DIR is optional: the page has a folder browser, and the last
+opened folder (and a few recent ones) are remembered in ~/.flatshapes_ui.json. IMAGE_DIR is walked recursively. Verdicts (correct / wrong shapes and
 missed shapes) are saved as JSON under VERDICT_DIR with the same folder structure as IMAGE_DIR
 (default: IMAGE_DIR/../flatshapes_verdicts). Standard library only, besides flatshapes' own dependencies.
 """
@@ -35,7 +36,84 @@ RELAX = {
     "star": dict(max_mean=1e9, max_p80=1e9, max_area_err=1e9),
 }
 
-STATE = {"root": "", "verdicts": "", "cache": {}, "lock": threading.Lock()}
+STATE = {"root": "", "verdicts": "", "verdicts_fixed": False, "cache": {}, "lock": threading.Lock()}
+CONFIG = os.path.join(os.path.expanduser("~"), ".flatshapes_ui.json")
+
+
+def load_config():
+    try:
+        with open(CONFIG, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_config(cfg):
+    try:
+        with open(CONFIG, "w", encoding="utf-8") as fh:
+            json.dump(cfg, fh, indent=1)
+    except OSError:
+        pass
+
+
+def open_folder(path, verdicts=None):
+    """Make `path` the image folder; verdicts go next to it unless a folder was given on the command line."""
+    path = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isdir(path):
+        raise ValueError(f"not a folder: {path}")
+    STATE["root"] = path
+    if verdicts:
+        STATE["verdicts"] = os.path.abspath(verdicts)
+    elif not STATE["verdicts_fixed"]:
+        STATE["verdicts"] = os.path.join(os.path.dirname(path) or path, "flatshapes_verdicts")
+    with STATE["lock"]:
+        STATE["cache"].clear()
+    cfg = load_config()
+    cfg["last"] = path
+    cfg["recent"] = ([path] + [p for p in cfg.get("recent", []) if p != path])[:8]
+    save_config(cfg)
+    return dict(root=STATE["root"], verdicts=STATE["verdicts"], images=list_images())
+
+
+def _drives():
+    if os.name != "nt":
+        return []
+    import string
+    return [f"{c}:\\" for c in string.ascii_uppercase if os.path.exists(f"{c}:\\")]
+
+
+def browse(path):
+    """Subfolders of `path` (default: the open folder, else the home folder) and how many images it holds."""
+    path = os.path.abspath(os.path.expanduser(path or STATE["root"] or os.path.expanduser("~")))
+    if not os.path.isdir(path):
+        raise ValueError(f"not a folder: {path}")
+    dirs, n_img = [], 0
+    try:
+        for e in sorted(os.scandir(path), key=lambda e: e.name.lower()):
+            if e.name.startswith((".", "$")):
+                continue
+            try:
+                if e.is_dir():
+                    dirs.append(e.name)
+                elif e.name.lower().endswith(IMAGE_EXT):
+                    n_img += 1
+            except OSError:
+                continue
+    except PermissionError:
+        raise ValueError(f"no access to {path}")
+    # images in subfolders too, counted up to a limit so huge trees stay fast
+    deep, limit = 0, 5000
+    for root, ds, files in os.walk(path):
+        ds[:] = [d for d in ds if not d.startswith((".", "$"))]
+        deep += sum(1 for f in files if f.lower().endswith(IMAGE_EXT))
+        if deep >= limit:
+            break
+    parent = os.path.dirname(path)
+    if os.path.normcase(parent) == os.path.normcase(path):  # a drive root or /
+        parent = ""
+    return dict(path=path, parent=parent, dirs=dirs, images_here=n_img, images_total=deep,
+                images_total_capped=deep >= limit, drives=_drives(), home=os.path.expanduser("~"),
+                recent=[p for p in load_config().get("recent", []) if os.path.isdir(p)], current=STATE["root"])
 
 
 def _safe_path(rel):
@@ -47,6 +125,8 @@ def _safe_path(rel):
 
 def list_images():
     out = []
+    if not STATE["root"]:
+        return out
     for root, dirs, files in os.walk(STATE["root"]):
         dirs.sort()
         for n in sorted(files):
@@ -250,6 +330,8 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/":
                 with open(os.path.join(HERE, "index.html"), "rb") as fh:
                     self._send(200, fh.read(), "text/html; charset=utf-8")
+            elif u.path == "/api/browse":
+                self._send(200, browse(q.get("path", "")))
             elif u.path == "/api/list":
                 self._send(200, dict(root=STATE["root"], verdicts=STATE["verdicts"], images=list_images()))
             elif u.path == "/api/image":
@@ -278,7 +360,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             n = int(self.headers.get("Content-Length", 0))
             req = json.loads(self.rfile.read(n) or b"{}")
-            route = {"/api/detect": run_detect, "/api/inspect": run_inspect, "/api/verdicts": save_verdicts}
+            route = {"/api/detect": run_detect, "/api/inspect": run_inspect, "/api/verdicts": save_verdicts,
+                     "/api/open": lambda r: open_folder(r["path"])}
             fn = route.get(urlparse(self.path).path)
             if fn is None:
                 self._send(404, dict(error="not found"))
@@ -290,15 +373,19 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("images", help="folder with test images (subfolders included)")
+    ap.add_argument("images", nargs="?", help="folder with test images (subfolders included); optional")
     ap.add_argument("--verdicts", help="folder for verdict JSON files")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-browser", action="store_true")
     a = ap.parse_args()
-    STATE["root"] = os.path.abspath(a.images)
-    STATE["verdicts"] = os.path.abspath(a.verdicts or os.path.join(STATE["root"], os.pardir, "flatshapes_verdicts"))
+    if a.verdicts:
+        STATE["verdicts"], STATE["verdicts_fixed"] = os.path.abspath(a.verdicts), True
+    start = a.images or load_config().get("last")
+    if start and os.path.isdir(start):
+        open_folder(start)
     url = f"http://localhost:{a.port}"
-    print(f"Images:   {STATE['root']}\nVerdicts: {STATE['verdicts']}\nOpen {url}  (Ctrl+C to stop)")
+    print(f"Images:   {STATE['root'] or '(choose a folder in the page)'}\nVerdicts: {STATE['verdicts'] or '-'}\n"
+          f"Open {url}  (Ctrl+C to stop)")
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
     if not a.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
