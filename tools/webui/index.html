@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>flatshapes test bench</title>
+<style>
+  :root { --bg:#16171a; --panel:#1f2024; --line:#33353b; --text:#e6e6e6; --dim:#9a9ca3; --acc:#e0b04c;
+          --ok:#4cd07d; --bad:#ff5a5a; --circle:#00e5ff; --ellipse:#3d7bff; --polygon:#22c55e; --star:#ff3df2; --line-k:#ff9a1f; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:13px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--text); height:100vh;
+         display:grid; grid-template-columns:240px 1fr 330px; grid-template-rows:auto 1fr; }
+  header { grid-column:1/4; display:flex; gap:14px; align-items:center; padding:6px 10px; background:var(--panel);
+           border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header b { color:var(--acc); }
+  aside, #right { background:var(--panel); overflow:auto; }
+  aside { border-right:1px solid var(--line); }
+  #right { border-left:1px solid var(--line); }
+  .tabs { display:flex; flex-wrap:wrap; gap:2px; }
+  .tab { padding:4px 9px; border:1px solid var(--line); background:#26272c; color:var(--dim); cursor:pointer;
+         border-radius:4px; user-select:none; }
+  .tab.on { background:var(--acc); color:#111; border-color:var(--acc); }
+  .tab.kind.on { color:#111; }
+  #files input { width:100%; margin:0; padding:6px; background:#121316; color:var(--text); border:0;
+                 border-bottom:1px solid var(--line); }
+  .file { padding:4px 8px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--dim); }
+  .file:hover { background:#2a2b30; }
+  .file.on { background:#3a3220; color:var(--text); }
+  .file .v { float:right; color:var(--ok); font-size:11px; }
+  #view { position:relative; overflow:hidden; background:#0c0c0e; }
+  #view svg { width:100%; height:100%; display:block; cursor:crosshair; }
+  #status { position:absolute; left:8px; bottom:6px; color:var(--dim); background:#000a; padding:2px 6px; border-radius:3px; }
+  section { padding:8px 10px; border-bottom:1px solid var(--line); }
+  h3 { margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--dim); }
+  .row { display:grid; grid-template-columns:110px 1fr 46px; gap:6px; align-items:center; margin:3px 0; }
+  .row input[type=range] { width:100%; }
+  .row span { text-align:right; font-variant-numeric:tabular-nums; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  td, th { padding:2px 4px; border-bottom:1px solid #2a2b30; text-align:left; font-variant-numeric:tabular-nums; }
+  .pass { color:var(--ok); } .fail { color:var(--bad); }
+  .btn { padding:5px 10px; border:1px solid var(--line); background:#2a2b30; color:var(--text); border-radius:4px; cursor:pointer; }
+  .btn.ok { border-color:var(--ok); color:var(--ok); } .btn.bad { border-color:var(--bad); color:var(--bad); }
+  .muted { color:var(--dim); }
+  kbd { background:#2a2b30; border:1px solid var(--line); border-radius:3px; padding:0 4px; font-size:11px; }
+  .sw { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:middle; margin-right:4px; }
+</style>
+</head>
+<body>
+<header>
+  <b>flatshapes</b>
+  <div class="tabs" id="modeTabs"></div>
+  <div class="tabs" id="missedTabs" style="display:none"></div>
+  <span class="muted">Show:</span>
+  <div class="tabs" id="kindTabs"></div>
+  <span class="muted" id="counts"></span>
+  <span style="flex:1"></span>
+  <span class="muted"><kbd>C</kbd> correct <kbd>X</kbd> wrong <kbd>Del</kbd> clear <kbd>←</kbd><kbd>→</kbd> image <kbd>F</kbd> fit</span>
+</header>
+<aside id="files"><input id="filter" placeholder="filter files…"><div id="fileList"></div></aside>
+<div id="view"><svg id="svg"></svg><div id="status">loading…</div></div>
+<div id="right">
+  <section><div class="tabs" id="panelTabs"></div></section>
+  <div id="panelSettings"></div>
+  <div id="panelInspector" style="display:none"></div>
+  <div id="panelVerdicts" style="display:none"></div>
+</div>
+<script>
+const KINDS = ["circle", "ellipse", "polygon", "star", "line"];
+const KCOL = k => getComputedStyle(document.documentElement).getPropertyValue(k === "line" ? "--line-k" : "--" + k).trim();
+// slider definitions: [key, label, min, max, step, default]
+const SETTINGS = {
+  general: [["colors", "colours (k-means)", 2, 16, 1, 8], ["merge_de", "merge colours ΔE", 0, 30, 1, 10],
+            ["min_area", "min area px", 5, 500, 5, 60], ["rim", "rim ignore px", 0, 10, 1, 4],
+            ["slack", "model slack px", 0, 1, 0.05, 0.15]],
+  circle:  [["max_mean", "mean ≤ px", 0.1, 2, 0.05, 0.45], ["max_p80", "p80 ≤ px", 0.2, 3, 0.05, 0.9],
+            ["min_r", "min radius px", 1, 30, 0.5, 3], ["max_gap_deg", "max gap °", 60, 360, 5, 200],
+            ["min_visible", "min visible", 0, 1, 0.05, 0.3]],
+  ellipse: [["max_mean", "mean ≤ px", 0.1, 2, 0.05, 0.5], ["max_p80", "p80 ≤ px", 0.2, 3, 0.05, 1.0],
+            ["max_aspect", "max axis ratio", 1, 20, 0.5, 6], ["max_gap_deg", "max gap °", 60, 360, 5, 200],
+            ["min_visible", "min visible", 0, 1, 0.05, 0.4]],
+  polygon: [["max_mean", "mean ≤ px", 0.1, 2, 0.05, 0.8], ["max_p80", "p80 ≤ px", 0.2, 3, 0.05, 1.3],
+            ["max_sides", "max sides", 3, 16, 1, 12], ["eps_rel", "corner eps (rel)", 0.005, 0.06, 0.005, 0.02],
+            ["min_side", "min side px", 1, 30, 1, 4]],
+  star:    [["max_mean", "mean ≤ px", 0.1, 2, 0.05, 0.7], ["max_p80", "p80 ≤ px", 0.2, 3, 0.05, 1.5],
+            ["max_area_err", "area err ≤", 0.01, 0.3, 0.01, 0.06], ["min_ratio", "tip / inner r ≥", 1, 3, 0.05, 1.5]],
+  line:    [["min_len", "min length px", 5, 200, 1, 20], ["max_width", "max width px", 1, 30, 0.5, 9],
+            ["body_r", "body radius px", 1, 12, 0.5, 4], ["max_angle", "join angle °", 0, 15, 0.5, 4],
+            ["max_offset", "join offset px", 0, 8, 0.5, 2], ["max_gap", "join gap px", 0, 300, 5, 90]],
+};
+const S = { images: [], cur: -1, data: null, sel: null, verd: { marks: [], missed: [] }, mode: "inspect",
+            missedKind: "circle", show: Object.fromEntries(KINDS.map(k => [k, true])), panel: "settings",
+            group: "general", vb: null, inspect: null,
+            values: {}, enabled: Object.fromEntries(KINDS.map(k => [k, true])) };
+for (const [g, rows] of Object.entries(SETTINGS)) { S.values[g] = {}; for (const r of rows) S.values[g][r[0]] = r[5]; }
+try { const saved = JSON.parse(localStorage.getItem("fs_settings") || "null");
+      if (saved) { for (const g in saved.values) Object.assign(S.values[g] || {}, saved.values[g]); Object.assign(S.enabled, saved.enabled || {}); } } catch (e) {}
+
+const $ = id => document.getElementById(id);
+const api = async (url, body) => {
+  const r = await fetch(url, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const j = await r.json(); if (j.error) throw new Error(j.error); return j;
+};
+function tabs(el, items, cur, onPick, extraClass = "") {
+  el.innerHTML = "";
+  for (const [key, label, color] of items) {
+    const t = document.createElement("div"); t.className = "tab " + extraClass + (cur(key) ? " on" : "");
+    t.textContent = label; if (color && cur(key)) t.style.background = color, t.style.borderColor = color;
+    t.onclick = () => onPick(key); el.appendChild(t);
+  }
+}
+function status(t) { $("status").textContent = t; }
+
+// ---------- header ----------
+function drawHeader() {
+  tabs($("modeTabs"), [["inspect", "Inspect"], ["missed", "Mark missed"]], k => S.mode === k, k => { S.mode = k; drawHeader(); });
+  $("missedTabs").style.display = S.mode === "missed" ? "flex" : "none";
+  tabs($("missedTabs"), KINDS.map(k => [k, k, KCOL(k)]), k => S.missedKind === k, k => { S.missedKind = k; drawHeader(); }, "kind");
+  tabs($("kindTabs"), KINDS.map(k => [k, k, KCOL(k)]), k => S.show[k], k => { S.show[k] = !S.show[k]; drawHeader(); drawShapes(); }, "kind");
+  if (S.data) {
+    const c = {}; for (const s of S.data.shapes) c[s.kind] = (c[s.kind] || 0) + 1;
+    $("counts").textContent = KINDS.filter(k => c[k]).map(k => `${k} ${c[k]}`).join(" · ") || "nothing found";
+  }
+}
+
+// ---------- files ----------
+function drawFiles() {
+  const f = $("filter").value.toLowerCase(), list = $("fileList"); list.innerHTML = "";
+  S.images.forEach((p, i) => {
+    if (f && !p.toLowerCase().includes(f)) return;
+    const d = document.createElement("div"); d.className = "file" + (i === S.cur ? " on" : ""); d.title = p;
+    d.textContent = p; d.onclick = () => openImage(i); list.appendChild(d);
+  });
+}
+$("filter").oninput = drawFiles;
+
+// ---------- settings panel ----------
+function drawPanels() {
+  tabs($("panelTabs"), [["settings", "Settings"], ["inspector", "Inspector"], ["verdicts", "Verdicts"]], k => S.panel === k,
+       k => { S.panel = k; drawPanels(); });
+  $("panelSettings").style.display = S.panel === "settings" ? "" : "none";
+  $("panelInspector").style.display = S.panel === "inspector" ? "" : "none";
+  $("panelVerdicts").style.display = S.panel === "verdicts" ? "" : "none";
+  if (S.panel === "settings") drawSettings();
+  if (S.panel === "inspector") drawInspector();
+  if (S.panel === "verdicts") drawVerdicts();
+}
+function drawSettings() {
+  const el = $("panelSettings"); el.innerHTML = "";
+  const sec = document.createElement("section"); el.appendChild(sec);
+  const gt = document.createElement("div"); gt.className = "tabs"; sec.appendChild(gt);
+  tabs(gt, Object.keys(SETTINGS).map(g => [g, g]), g => S.group === g, g => { S.group = g; drawSettings(); });
+  const body = document.createElement("section"); el.appendChild(body);
+  const g = S.group;
+  if (g !== "general") {
+    const en = document.createElement("div"); en.className = "tabs"; en.style.marginBottom = "6px"; body.appendChild(en);
+    tabs(en, [["on", "enabled"], ["off", "disabled"]], k => (k === "on") === S.enabled[g],
+         k => { S.enabled[g] = k === "on"; drawSettings(); changed(); });
+  }
+  for (const [key, label, mn, mx, st] of SETTINGS[g]) {
+    const row = document.createElement("div"); row.className = "row";
+    const v = S.values[g][key];
+    row.innerHTML = `<label>${label}</label><input type="range" min="${mn}" max="${mx}" step="${st}" value="${v}"><span>${v}</span>`;
+    const inp = row.querySelector("input"), out = row.querySelector("span");
+    inp.oninput = () => { out.textContent = inp.value; S.values[g][key] = parseFloat(inp.value); changed(); };
+    body.appendChild(row);
+  }
+  const rs = document.createElement("section"); el.appendChild(rs);
+  const b = document.createElement("button"); b.className = "btn"; b.textContent = "Reset this tab to defaults";
+  b.onclick = () => { for (const r of SETTINGS[g]) S.values[g][r[0]] = r[5]; drawSettings(); changed(); };
+  rs.appendChild(b);
+  const p = document.createElement("div"); p.className = "muted"; p.style.marginTop = "8px";
+  p.textContent = "Changes re-run detection on the current image. Settings are remembered in this browser and saved with each verdict file.";
+  rs.appendChild(p);
+}
+let tChange = null;
+function changed() {
+  try { localStorage.setItem("fs_settings", JSON.stringify({ values: S.values, enabled: S.enabled })); } catch (e) {}
+  clearTimeout(tChange); tChange = setTimeout(() => detect(), 350);
+}
+function reqBase() {
+  const options = {}; for (const k of KINDS) options[k] = S.values[k];
+  return { path: S.images[S.cur], settings: S.values.general, options, enabled: S.enabled };
+}
+
+// ---------- viewer ----------
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+function setVB() { $("svg").setAttribute("viewBox", S.vb.join(" ")); drawShapes(); }
+function fit() { if (!S.data) return; const v = $("view").getBoundingClientRect(), w = S.data.width, h = S.data.height;
+  const sc = Math.max(w / v.width, h / v.height); S.vb = [-(v.width * sc - w) / 2, -(v.height * sc - h) / 2, v.width * sc, v.height * sc]; setVB(); }
+function toImg(ev) { const r = $("svg").getBoundingClientRect();
+  return [S.vb[0] + (ev.clientX - r.left) / r.width * S.vb[2], S.vb[1] + (ev.clientY - r.top) / r.height * S.vb[3]]; }
+const svg = $("svg");
+svg.addEventListener("wheel", ev => { if (!S.vb) return; ev.preventDefault(); const [x, y] = toImg(ev), f = ev.deltaY > 0 ? 1.2 : 1 / 1.2;
+  S.vb = [x - (x - S.vb[0]) * f, y - (y - S.vb[1]) * f, S.vb[2] * f, S.vb[3] * f]; setVB(); }, { passive: false });
+let drag = null;
+svg.addEventListener("mousedown", ev => { drag = { x: ev.clientX, y: ev.clientY, vb: S.vb.slice(), moved: false }; });
+window.addEventListener("mousemove", ev => { if (!drag) return; const r = svg.getBoundingClientRect();
+  const dx = (ev.clientX - drag.x) / r.width * S.vb[2], dy = (ev.clientY - drag.y) / r.height * S.vb[3];
+  if (Math.abs(ev.clientX - drag.x) + Math.abs(ev.clientY - drag.y) > 4) drag.moved = true;
+  if (drag.moved) { S.vb = [drag.vb[0] - dx, drag.vb[1] - dy, S.vb[2], S.vb[3]]; setVB(); } });
+window.addEventListener("mouseup", ev => { if (drag && !drag.moved && ev.target.closest && ev.target.closest("#svg")) clickAt(ev); drag = null; });
+
+function px() { return S.vb ? S.vb[2] / svg.getBoundingClientRect().width : 1; }
+function markFor(s) { return S.verd.marks.find(m => m.kind === s.kind && Math.hypot(m.centre[0] - s.centre[0], m.centre[1] - s.centre[1]) < 3); }
+function drawShapes() {
+  if (!S.data) return;
+  let g = svg.querySelector("#ov"); if (g) g.remove(); g = el("g", { id: "ov" }, svg);
+  const lw = 2 * px();
+  for (const s of S.data.shapes) {
+    if (!S.show[s.kind]) continue;
+    const d = "M" + s.pts.map(p => p.join(",")).join("L") + (s.closed ? "Z" : "");
+    const sel = S.sel === s.id, m = markFor(s);
+    const p = el("path", { d, fill: sel ? KCOL(s.kind) + "33" : "none", stroke: KCOL(s.kind), "stroke-width": sel ? lw * 2 : lw,
+                           "stroke-dasharray": m && m.verdict === "wrong" ? `${4 * px()} ${3 * px()}` : "" }, g);
+    p.style.cursor = "pointer"; p.dataset.id = s.id; p.style.pointerEvents = "visibleStroke";
+    if (m) el("text", { x: s.centre[0], y: s.centre[1] + 5 * px(), "font-size": 14 * px(), "text-anchor": "middle",
+                        fill: m.verdict === "correct" ? "#4cd07d" : "#ff5a5a", "font-weight": "bold" }, g).textContent = m.verdict === "correct" ? "✓" : "✗";
+  }
+  for (const ms of S.verd.missed) {
+    if (!S.show[ms.kind]) continue;
+    const r = 7 * px();
+    el("circle", { cx: ms.x, cy: ms.y, r, fill: "none", stroke: KCOL(ms.kind), "stroke-width": lw, "stroke-dasharray": `${2 * px()} ${2 * px()}` }, g);
+    el("text", { x: ms.x, y: ms.y - r - 2 * px(), "font-size": 11 * px(), "text-anchor": "middle", fill: KCOL(ms.kind) }, g).textContent = "missed " + ms.kind;
+  }
+  if (S.inspect && S.inspect.models && S.inspect.hover) {
+    const m = S.inspect.models.find(m => m.kind === S.inspect.hover);
+    if (m && m.pts) el("path", { d: "M" + m.pts.map(p => p.join(",")).join("L") + "Z", fill: "none", stroke: "#fff", "stroke-width": lw, "stroke-dasharray": `${3 * px()} ${2 * px()}` }, g);
+  }
+  if (S.inspect && S.inspect.bbox) { const [x0, y0, x1, y1] = S.inspect.bbox;
+    el("rect", { x: x0, y: y0, width: x1 - x0, height: y1 - y0, fill: "none", stroke: "#fff8", "stroke-width": px() }, g); }
+}
+
+async function clickAt(ev) {
+  if (!S.data) return;
+  const [x, y] = toImg(ev);
+  if (S.mode === "missed") {
+    S.verd.missed.push({ kind: S.missedKind, x: +x.toFixed(1), y: +y.toFixed(1) }); saveVerdicts(); drawShapes(); return;
+  }
+  const id = ev.target.dataset && ev.target.dataset.id;
+  S.sel = id || null; drawShapes();
+  status("inspecting…");
+  try { S.inspect = await api("/api/inspect", { ...reqBase(), x, y }); S.inspect.shapeId = id; status(`(${x.toFixed(0)}, ${y.toFixed(0)})`); }
+  catch (e) { status("inspect failed: " + e.message); return; }
+  S.panel = "inspector"; drawPanels(); drawShapes();
+}
+
+// ---------- inspector ----------
+function drawInspector() {
+  const elp = $("panelInspector"); elp.innerHTML = "";
+  const s = S.data && S.data.shapes.find(s => s.id === S.sel);
+  if (s) {
+    const sec = document.createElement("section"); elp.appendChild(sec);
+    const m = markFor(s);
+    sec.innerHTML = `<h3>Detected: <span style="color:${KCOL(s.kind)}">${s.kind}</span></h3>
+      <table>${Object.entries(s.params).map(([k, v]) => `<tr><td>${k}</td><td>${fmtV(v)}</td></tr>`).join("")}
+      ${Object.entries(s.metrics).map(([k, v]) => `<tr><td class="muted">${k}</td><td>${fmtV(v)}</td></tr>`).join("")}</table>
+      <div style="margin-top:8px;display:flex;gap:6px">
+        <button class="btn ok" id="bOk">✓ Correct (C)</button><button class="btn bad" id="bBad">✗ Wrong (X)</button>
+        <button class="btn" id="bClr">Clear</button></div>
+      <div class="muted" style="margin-top:4px">${m ? "Marked: " + m.verdict : "Not marked"}</div>
+      <details style="margin-top:6px"><summary class="muted">SVG path</summary><textarea style="width:100%;height:70px;background:#121316;color:#ccc;border:1px solid #333" readonly>${s.path}</textarea></details>`;
+    $("bOk").onclick = () => mark("correct"); $("bBad").onclick = () => mark("wrong"); $("bClr").onclick = () => mark(null);
+  }
+  const I = S.inspect;
+  const sec2 = document.createElement("section"); elp.appendChild(sec2);
+  if (!I) { sec2.innerHTML = `<div class="muted">Click a shape or any spot of the image to see how every model fits that region.</div>`; return; }
+  if (I.background) { sec2.innerHTML = `<h3>Region</h3><span class="sw" style="background:${I.colour}"></span>background — not analysed`; return; }
+  sec2.innerHTML = `<h3>Region under click</h3>
+    <div><span class="sw" style="background:${I.colour}"></span>label ${I.label} · area ${I.area} px · hidden by others ${(I.hidden_share * 100).toFixed(0)}%</div>
+    ${I.area < I.min_area ? `<div class="fail">smaller than min area (${I.min_area}) — skipped by detection</div>` : ""}
+    <div style="margin:4px 0">Chosen model: <b style="color:${I.chosen ? KCOL(I.chosen) : "inherit"}">${I.chosen || "none"}</b></div>
+    <table><tr><th>model</th><th>mean</th><th>p80</th><th>extra</th><th></th></tr>
+    ${I.models.map(m => { const mt = m.metrics || {};
+       const extra = [m.k ? "k=" + m.k : "", mt.area_err != null ? "area " + (mt.area_err * 100).toFixed(1) + "%" : "", mt.visible != null ? "vis " + (mt.visible * 100).toFixed(0) + "%" : ""].filter(Boolean).join(" ");
+       return `<tr data-k="${m.kind}" style="cursor:pointer"><td style="color:${KCOL(m.kind)}">${m.kind}</td><td>${fmtV(mt.mean)}</td><td>${fmtV(mt.p80)}</td><td class="muted">${m.note ? "no fit" : extra}</td>
+               <td class="${m.passed ? "pass" : "fail"}">${m.passed ? "pass" : "fail"}</td></tr>`; }).join("")}
+    </table><div class="muted" style="margin-top:4px">Hover a row to draw that model (white dashed). Failed models are fitted with limits lifted, so you can see how far they are from passing. Compare with the limits in Settings.</div>`;
+  sec2.querySelectorAll("tr[data-k]").forEach(tr => {
+    tr.onmouseenter = () => { S.inspect.hover = tr.dataset.k; drawShapes(); };
+    tr.onmouseleave = () => { S.inspect.hover = null; drawShapes(); };
+    tr.onclick = () => { S.panel = "settings"; S.group = tr.dataset.k; drawPanels(); };
+  });
+}
+function fmtV(v) { if (v == null) return "–"; if (typeof v === "number") return Math.abs(v) > 1e6 ? "∞" : +v.toFixed(3);
+  if (Array.isArray(v)) return JSON.stringify(v.length > 6 ? v.slice(0, 6).concat(["…"]) : v); return String(v); }
+
+// ---------- verdicts ----------
+function mark(verdict) {
+  const s = S.data && S.data.shapes.find(s => s.id === S.sel); if (!s) return;
+  S.verd.marks = S.verd.marks.filter(m => m !== markFor(s));
+  if (verdict) S.verd.marks.push({ kind: s.kind, centre: s.centre, verdict, label: s.label, params: s.params, metrics: s.metrics });
+  saveVerdicts(); drawShapes(); drawPanels();
+}
+let tSave = null;
+function saveVerdicts() {
+  clearTimeout(tSave); const path = S.images[S.cur], body = { path, marks: S.verd.marks, missed: S.verd.missed, settings: { values: S.values, enabled: S.enabled } };
+  tSave = setTimeout(async () => { try { const r = await api("/api/verdicts", body); status("saved " + r.saved); } catch (e) { status("save failed: " + e.message); } }, 300);
+}
+async function drawVerdicts() {
+  const elp = $("panelVerdicts"); elp.innerHTML = "";
+  const sec = document.createElement("section"); elp.appendChild(sec);
+  const c = S.verd.marks.filter(m => m.verdict === "correct").length, w = S.verd.marks.length - c;
+  sec.innerHTML = `<h3>This image</h3><div><span class="pass">${c} correct</span> · <span class="fail">${w} wrong</span> · ${S.verd.missed.length} missed</div>
+    <div class="muted" style="margin:6px 0">Missed shapes: switch to <b>Mark missed</b>, pick the kind, click where it is. Click a missed marker in the list to remove it.</div>
+    <div id="missedList"></div>`;
+  const ml = sec.querySelector("#missedList");
+  S.verd.missed.forEach((m, i) => { const d = document.createElement("div"); d.className = "file";
+    d.innerHTML = `<span style="color:${KCOL(m.kind)}">missed ${m.kind}</span> at (${m.x.toFixed(0)}, ${m.y.toFixed(0)}) <span class="muted">— remove</span>`;
+    d.onclick = () => { S.verd.missed.splice(i, 1); saveVerdicts(); drawShapes(); drawVerdicts(); }; ml.appendChild(d); });
+  const sec2 = document.createElement("section"); elp.appendChild(sec2); sec2.innerHTML = `<h3>All images</h3><div class="muted">loading…</div>`;
+  try { const t = await api("/api/summary");
+    sec2.innerHTML = `<h3>All images (${t.images} with verdicts)</h3><table><tr><th>kind</th><th>correct</th><th>wrong</th><th>missed</th><th>precision</th></tr>
+      ${Object.entries(t.by_kind).map(([k, v]) => `<tr><td style="color:${KCOL(k)}">${k}</td><td>${v.correct}</td><td>${v.wrong}</td><td>${v.missed}</td>
+        <td>${v.correct + v.wrong ? (100 * v.correct / (v.correct + v.wrong)).toFixed(0) + "%" : "–"}</td></tr>`).join("")}</table>`;
+  } catch (e) { sec2.innerHTML = `<div class="fail">${e.message}</div>`; }
+}
+
+// ---------- image loading ----------
+async function openImage(i) {
+  if (i < 0 || i >= S.images.length) return;
+  S.cur = i; S.sel = null; S.inspect = null; drawFiles();
+  const path = S.images[i];
+  svg.innerHTML = ""; status("loading " + path);
+  try { S.verd = await api("/api/verdicts?path=" + encodeURIComponent(path)); } catch (e) { S.verd = { marks: [], missed: [] }; }
+  const img = el("image", { href: "/api/image?path=" + encodeURIComponent(path), x: 0, y: 0 }, svg);
+  img.style.imageRendering = "pixelated";
+  await detect(true);
+  img.setAttribute("width", S.data.width); img.setAttribute("height", S.data.height);
+  img.style.opacity = 0.6;
+}
+let detectSeq = 0;
+async function detect(refit) {
+  if (S.cur < 0) return;
+  const seq = ++detectSeq; status("detecting…"); const t0 = performance.now();
+  try { const d = await api("/api/detect", reqBase()); if (seq !== detectSeq) return; S.data = d; }
+  catch (e) { status("detect failed: " + e.message); return; }
+  status(`${S.images[S.cur]} · ${S.data.width}×${S.data.height} · ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+  if (refit || !S.vb) fit(); else drawShapes();
+  drawHeader(); if (S.panel !== "settings") drawPanels();
+}
+
+window.addEventListener("keydown", ev => {
+  if (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA") return;
+  if (ev.key === "c" || ev.key === "C") mark("correct");
+  else if (ev.key === "x" || ev.key === "X") mark("wrong");
+  else if (ev.key === "Delete" || ev.key === "Backspace") mark(null);
+  else if (ev.key === "ArrowRight") openImage(S.cur + 1);
+  else if (ev.key === "ArrowLeft") openImage(S.cur - 1);
+  else if (ev.key === "f" || ev.key === "F") fit();
+  else if (ev.key === "Escape") { S.sel = null; S.inspect = null; drawShapes(); drawPanels(); }
+});
+window.addEventListener("resize", () => S.vb && fit());
+
+(async () => {
+  drawHeader(); drawPanels();
+  try { const r = await api("/api/list"); S.images = r.images; drawFiles();
+        status(r.images.length ? `${r.images.length} images · verdicts → ${r.verdicts}` : "no images in " + r.root);
+        if (r.images.length) openImage(0); }
+  catch (e) { status("server error: " + e.message); }
+})();
+</script>
+</body>
+</html>

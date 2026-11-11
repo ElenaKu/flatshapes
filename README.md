@@ -86,6 +86,21 @@ Walks INPUT_DIR recursively (same folder structure in OUTPUT_DIR), quantizes eac
 `detect_shapes` and `detect_lines`, and writes `<name>_shapes.png` (shapes outlined by kind), `<name>_shapes.json`
 and `summary.csv`.
 
+## Test bench (web UI)
+
+```
+python tools/webui/server.py IMAGE_DIR [--verdicts VERDICT_DIR] [--port 8765]
+```
+
+Opens a local page (http://localhost:8765, standard library server, nothing extra to install):
+
+- file list of IMAGE_DIR (subfolders included); detected shapes drawn over the image, kinds toggled with tabs;
+  wheel to zoom, drag to pan, `F` to fit
+- **Settings**: sliders for every detector limit (tabs per detector), detection re-runs on each change
+- **Inspector**: click any spot to see every model fitted to that region, its errors and pass / fail, and draw it
+- **Verdicts**: mark shapes correct (`C`) / wrong (`X`), mark missed shapes by kind; saved as JSON under
+  VERDICT_DIR with the same folder structure (default IMAGE_DIR/../flatshapes_verdicts), totals and precision per kind
+
 ## Tests
 
 ```
