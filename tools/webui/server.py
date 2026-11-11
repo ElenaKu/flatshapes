@@ -85,6 +85,7 @@ def run_detect(req):
     opts = {k: req.get("options", {}).get(k, {}) for k in KINDS}
     kinds = tuple(k for k in KINDS if req.get("enabled", {}).get(k, True))
     found = fs.detect_shapes(labels, background=bg, min_area=int(s.get("min_area", 60)), rim=int(s.get("rim", 4)),
+                             underlay_share=float(s.get("underlay", 0.5)),
                              kinds=kinds, slack=float(s.get("slack", 0.15)), options=opts,
                              colours={i: cols[i] for i in range(len(cols))}) if kinds else []
     shapes = [_shape_json(f, lab, f"s{n}") for n, (lab, _, f) in enumerate(found)]
@@ -115,7 +116,7 @@ def run_inspect(req):
     """Every model on the connected component under (x, y): metrics with limits lifted and whether it passes the
     current limits."""
     from scipy import ndimage as ndi
-    s = req.get("settings", {})
+    s = s_ = req.get("settings", {})
     labels, cols, bg = get_labels(req["path"], int(s.get("colors", 8)), float(s.get("merge_de", 10)))
     x, y = int(round(req["x"])), int(round(req["y"]))
     h, w = labels.shape
@@ -130,11 +131,7 @@ def run_inspect(req):
     y0, x0 = max(0, ys.min() - 3), max(0, xs.min() - 3)
     y1, x1 = min(h, ys.max() + 4), min(w, xs.max() + 4)
     m = comp[y0:y1, x0:x1]
-    other = labels[y0:y1, x0:x1] != lab
-    other &= labels[y0:y1, x0:x1] != bg
-    rim = int(s.get("rim", 4))
-    body = cv2.morphologyEx(other.astype(np.uint8), cv2.MORPH_OPEN, np.ones((rim + 1, rim + 1), np.uint8))
-    hid = cv2.dilate(body, np.ones((3, 3), np.uint8)) > 0
+    hid = fs.occluders(labels[y0:y1, x0:x1], m, lab, bg, int(s_.get("rim", 4)), float(s_.get("underlay", 0.5)))
     opts = req.get("options", {})
     models = []
     for k in KINDS:

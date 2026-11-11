@@ -30,10 +30,11 @@ def detect_shape(mask, hidden=None, kinds=ORDER, slack=0.15, options=None):
 
 
 def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, equal_radius=True, colours=None, rim=4,
-                  **kw):
+                  underlay_share=0.5, **kw):
     """Run detect_shape on every connected component of every label of a label map (H, W).
     hidden_by_others: outline that touches another non-background label counts as hidden (the neighbour may be in
-    front); parts of another label thinner than `rim` px (anti-aliasing fringes) do not count. colours: optional {label: CIELAB} for grouping same-size dots. Returns a list of
+    front); parts of another label thinner than `rim` px (anti-aliasing fringes) do not count, nor does a label
+    that takes up at least `underlay_share` of the ring around the shape (the shape lies on it, e.g. a star on a bag). colours: optional {label: CIELAB} for grouping same-size dots. Returns a list of
     (label, component index, ShapeFit)."""
     import cv2
     from scipy import ndimage as ndi
@@ -49,14 +50,7 @@ def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, e
             m = cc[y0:y1, x0:x1] == i
             if m.sum() < min_area:
                 continue
-            hid = None
-            if hidden_by_others:
-                other = L[y0:y1, x0:x1] != lab
-                if background is not None:
-                    other &= L[y0:y1, x0:x1] != background
-                # thin rims of another colour (anti-aliasing fringes) are not objects in front
-                body = cv2.morphologyEx(other.astype(np.uint8), cv2.MORPH_OPEN, np.ones((rim + 1, rim + 1), np.uint8))
-                hid = cv2.dilate(body, np.ones((3, 3), np.uint8)) > 0
+            hid = occluders(L[y0:y1, x0:x1], m, lab, background, rim, underlay_share) if hidden_by_others else None
             f = detect_shape(m, hid, **kw)
             if f is None:
                 continue
@@ -91,3 +85,25 @@ def _shift(f, dx, dy, shape):
         h, w = f.mask.shape
         full[dy:dy + h, dx:dx + w] = f.mask
         f.mask = full
+
+
+def occluders(L, m, lab, background=None, rim=4, underlay_share=0.5):
+    """Mask of outline that may be covered by objects in front, for component `m` (bool, same crop as label map L)
+    of label `lab`. Other labels count, except:
+      - the background;
+      - a label that fills at least `underlay_share` of the 2 px ring around the shape: the shape lies on it
+        (a star on a bag, a dot on a ribbon), it is not in front;
+      - parts thinner than `rim` px (anti-aliasing fringes)."""
+    import cv2
+    m8 = m.astype(np.uint8)
+    ring = (cv2.dilate(m8, np.ones((5, 5), np.uint8)) > 0) & ~m
+    other = L != lab
+    if background is not None:
+        other &= L != background
+    if ring.any():
+        vals, cnt = np.unique(L[ring], return_counts=True)
+        for v, c in zip(vals, cnt):
+            if v != lab and c >= underlay_share * ring.sum():
+                other &= L != v
+    body = cv2.morphologyEx(other.astype(np.uint8), cv2.MORPH_OPEN, np.ones((rim + 1, rim + 1), np.uint8))
+    return cv2.dilate(body, np.ones((3, 3), np.uint8)) > 0
