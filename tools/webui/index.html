@@ -28,7 +28,16 @@
   .file .v { float:right; color:var(--ok); font-size:11px; }
   #view { position:relative; overflow:hidden; background:#0c0c0e; }
   #view svg { width:100%; height:100%; display:block; cursor:crosshair; }
-  #status { position:absolute; left:8px; bottom:6px; color:var(--dim); background:#000a; padding:2px 6px; border-radius:3px; }
+  #busy { position:absolute; inset:0; display:none; align-items:center; justify-content:center; background:#0006;
+          pointer-events:none; flex-direction:column; gap:10px; color:var(--text); }
+  #busy.on { display:flex; }
+  .spin { width:46px; height:46px; border:4px solid #ffffff22; border-top-color:var(--acc); border-radius:50%;
+          animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #toast { position:absolute; right:10px; top:10px; background:#000c; border:1px solid var(--acc); color:var(--text);
+           padding:6px 10px; border-radius:4px; opacity:0; transition:opacity .3s; pointer-events:none; max-width:60%; }
+  #toast.on { opacity:1; }
+  #status { left:8px; bottom:6px; color:var(--dim); background:#000a; padding:2px 6px; border-radius:3px; }
   section { padding:8px 10px; border-bottom:1px solid var(--line); }
   h3 { margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--dim); }
   .row { display:grid; grid-template-columns:110px 1fr 46px; gap:6px; align-items:center; margin:3px 0; }
@@ -56,7 +65,7 @@
   <span class="muted"><kbd>C</kbd> correct <kbd>X</kbd> wrong <kbd>Del</kbd> clear <kbd>←</kbd><kbd>→</kbd> image <kbd>F</kbd> fit</span>
 </header>
 <aside id="files"><input id="filter" placeholder="filter files…"><div id="fileList"></div></aside>
-<div id="view"><svg id="svg"></svg><div id="status">loading…</div></div>
+<div id="view"><svg id="svg"></svg><div id="busy"><div class="spin"></div><div id="busyText">processing…</div></div><div id="toast"></div><div id="status">loading…</div></div>
 <div id="right">
   <section><div class="tabs" id="panelTabs"></div></section>
   <div id="panelSettings"></div>
@@ -108,6 +117,15 @@ function tabs(el, items, cur, onPick, extraClass = "") {
   }
 }
 function status(t) { $("status").textContent = t; }
+let busyN = 0, busyTimer = null;
+function busy(on, text) {
+  busyN = Math.max(0, busyN + (on ? 1 : -1));
+  if (on) $("busyText").textContent = text || "processing…";
+  $("busy").classList.toggle("on", busyN > 0);
+}
+let toastTimer = null;
+function toast(t) { const e = $("toast"); e.textContent = t; e.classList.add("on"); clearTimeout(toastTimer); toastTimer = setTimeout(() => e.classList.remove("on"), 2500); }
+function countKinds(d) { const c = {}; for (const s of (d ? d.shapes : [])) c[s.kind] = (c[s.kind] || 0) + 1; return c; }
 
 // ---------- header ----------
 function drawHeader() {
@@ -174,7 +192,8 @@ function drawSettings() {
 let tChange = null;
 function changed() {
   try { localStorage.setItem("fs_settings", JSON.stringify({ values: S.values, enabled: S.enabled })); } catch (e) {}
-  clearTimeout(tChange); tChange = setTimeout(() => detect(), 350);
+  status("settings changed — recalculating…");
+  clearTimeout(tChange); tChange = setTimeout(() => detect(false, true), 350);
 }
 function reqBase() {
   const options = {}; for (const k of KINDS) options[k] = S.values[k];
@@ -238,9 +257,10 @@ async function clickAt(ev) {
   }
   const id = ev.target.dataset && ev.target.dataset.id;
   S.sel = id || null; drawShapes();
-  status("inspecting…");
+  status("inspecting…"); busy(true, "fitting all models to this region…");
   try { S.inspect = await api("/api/inspect", { ...reqBase(), x, y }); S.inspect.shapeId = id; status(`(${x.toFixed(0)}, ${y.toFixed(0)})`); }
   catch (e) { status("inspect failed: " + e.message); return; }
+  finally { busy(false); }
   S.panel = "inspector"; drawPanels(); drawShapes();
 }
 
@@ -329,12 +349,21 @@ async function openImage(i) {
   img.style.opacity = 0.6;
 }
 let detectSeq = 0;
-async function detect(refit) {
+async function detect(refit, fromSettings) {
   if (S.cur < 0) return;
   const seq = ++detectSeq; status("detecting…"); const t0 = performance.now();
+  const before = S.data && !refit ? countKinds(S.data) : null;
+  busy(true, refit ? "loading and detecting…" : "recalculating with new settings…");
   try { const d = await api("/api/detect", reqBase()); if (seq !== detectSeq) return; S.data = d; }
-  catch (e) { status("detect failed: " + e.message); return; }
-  status(`${S.images[S.cur]} · ${S.data.width}×${S.data.height} · ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+  catch (e) { status("detect failed: " + e.message); toast("detect failed: " + e.message); return; }
+  finally { busy(false); }
+  const secs = ((performance.now() - t0) / 1000).toFixed(1);
+  status(`${S.images[S.cur]} · ${S.data.width}×${S.data.height} · ${secs} s · updated ${new Date().toLocaleTimeString()}`);
+  if (fromSettings && before) {
+    const after = countKinds(S.data), diff = KINDS.filter(k => (before[k] || 0) !== (after[k] || 0))
+      .map(k => `${k} ${before[k] || 0}→${after[k] || 0}`);
+    toast(`Recalculated in ${secs} s · ` + (diff.length ? diff.join(", ") : "same result with these settings"));
+  }
   if (refit || !S.vb) fit(); else drawShapes();
   drawHeader(); if (S.panel !== "settings") drawPanels();
 }
