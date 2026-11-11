@@ -39,17 +39,35 @@ def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, e
     count as objects in front, so a star with strings glued to it is fitted as a star. colours:
     optional {label: CIELAB} for grouping same-size dots. Returns a list of
     (label, component index, ShapeFit)."""
+    out = []
+    for lab, i, m, hid, x0, y0 in components(labels, background, min_area, hidden_by_others, rim, underlay_share,
+                                            lines, line_pad):
+        f = detect_shape(m, hid, **kw)
+        if f is None:
+            continue
+        _shift(f, x0, y0, np.asarray(labels).shape)
+        out.append((lab, i, f))
+    if equal_radius:
+        circ = [f for _, _, f in out if f.kind == "circle"]
+        cols = [colours[l] for l, _, f in out if f.kind == "circle"] if colours else None
+        equalize_radii(circ, cols)
+    return out
+
+
+def components(labels, background=None, min_area=40, hidden_by_others=True, rim=4, underlay_share=0.5, lines=None,
+               line_pad=3.0):
+    """Connected components of every label, as detect_shapes sees them: yields (label, index, mask crop, hidden
+    crop or None, x0, y0). Line strips (see detect_shapes) are removed from the masks and added to hidden."""
     import cv2
     from scipy import ndimage as ndi
     L = np.asarray(labels)
-    out = []
     line_mask = {}
-    if lines:
-        for lab, f in lines:
-            mm = line_mask.setdefault(int(lab), np.zeros(L.shape, np.uint8))
-            p0, p1 = np.round(np.asarray(f.params["p0"]) * 4).astype(int), np.round(np.asarray(f.params["p1"]) * 4).astype(int)
-            cv2.line(mm, tuple(int(v) for v in p0), tuple(int(v) for v in p1), 1,
-                     max(1, int(round(f.params["width"] + 2 * line_pad))), shift=2)
+    for lab, f in (lines or []):
+        mm = line_mask.setdefault(int(lab), np.zeros(L.shape, np.uint8))
+        p0 = np.round(np.asarray(f.params["p0"]) * 4).astype(int)
+        p1 = np.round(np.asarray(f.params["p1"]) * 4).astype(int)
+        cv2.line(mm, tuple(int(v) for v in p0), tuple(int(v) for v in p1), 1,
+                 max(1, int(round(f.params["width"] + 2 * line_pad))), shift=2)
     any_line = np.zeros(L.shape, bool)
     for mm in line_mask.values():
         any_line |= mm > 0
@@ -59,7 +77,7 @@ def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, e
         own = L == lab
         if int(lab) in line_mask:
             own &= line_mask[int(lab)] == 0
-        cc, n = ndi.label(own)
+        cc, _ = ndi.label(own)
         for i, sl in enumerate(ndi.find_objects(cc), 1):
             y0, x0 = max(0, sl[0].start - 3), max(0, sl[1].start - 3)
             y1, x1 = min(L.shape[0], sl[0].stop + 3), min(L.shape[1], sl[1].stop + 3)
@@ -70,16 +88,7 @@ def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, e
             if lines:
                 ln = cv2.dilate(any_line[y0:y1, x0:x1].astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
                 hid = ln if hid is None else (hid | ln)
-            f = detect_shape(m, hid, **kw)
-            if f is None:
-                continue
-            _shift(f, x0, y0, L.shape)
-            out.append((int(lab), i, f))
-    if equal_radius:
-        circ = [f for _, _, f in out if f.kind == "circle"]
-        cols = [colours[l] for l, _, f in out if f.kind == "circle"] if colours else None
-        equalize_radii(circ, cols)
-    return out
+            yield int(lab), i, m, hid, x0, y0
 
 
 def _shift(f, dx, dy, shape):

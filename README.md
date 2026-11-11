@@ -64,12 +64,14 @@ visible share) and `mask` (model mask).
 ## Defaults
 
 Thresholds are the values tuned in flat2svg on real illustration packs; all are keyword arguments.
+Distance limits grow with the shape size (`rel_mean` = 0.022, `rel_p80` = 0.035 of the equivalent radius, at most
+1.5x the absolute limit): edges of generated art wobble by a share of the shape size.
 
 | detector | accepted when |
 |---|---|
 | circle | mean dist <= 0.45 px (best 90 % of points), p80 <= 0.9 px, visible outline covers the circle (gap <= 200 deg) |
 | ellipse | mean <= 0.5 px, p80 <= 1.0 px, gap <= 200 deg, axis ratio <= 6 |
-| polygon | 3..12 sides, mean <= 0.8 px, p80 <= 1.3 px |
+| polygon | 3..12 sides, one common corner radius (0 = sharp), mean <= 0.8 px, p80 <= 1.3 px, no two neighbouring corners under 25 deg (a curve cut into chords) |
 | star | 4..8 tips, tip >= 1.5 x inscribed radius, mean <= 0.7 px (best 85 %), p80 <= 1.5 px, area error <= 6 % |
 | line | length >= 20 px, width <= 9 px, empty space on both sides; pieces join at <= 4 deg, <= 2 px offset, <= 90 px gap |
 
@@ -100,6 +102,16 @@ Opens a local page (http://localhost:8765, standard library server, nothing extr
 - **Inspector**: click any spot to see every model fitted to that region, its errors and pass / fail, and draw it
 - **Verdicts**: mark shapes correct (`C`) / wrong (`X`), mark missed shapes by kind; saved as JSON under
   VERDICT_DIR with the same folder structure (default IMAGE_DIR/../flatshapes_verdicts), totals and precision per kind
+
+## Tuning limits from verdicts
+
+```
+python tools/tune.py IMAGE_DIR [--verdicts VERDICT_DIR]
+```
+
+Re-fits only the regions you marked in the test bench and searches the detector limits for the settings that
+satisfy the most marks (correct kept, wrong removed, missed found). Writes `VERDICT_DIR/tuned_settings.json`;
+load it in the web UI with **Load tuned settings** (Settings tab).
 
 ## Tests
 

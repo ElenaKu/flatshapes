@@ -177,7 +177,7 @@ def summary():
     tot = dict(images=0, correct=0, wrong=0, missed=0, by_kind={})
     for root, _, files in os.walk(STATE["verdicts"]):
         for n in files:
-            if not n.endswith(".json"):
+            if not n.endswith(".json") or n == "tuned_settings.json":
                 continue
             with open(os.path.join(root, n), encoding="utf-8") as fh:
                 d = json.load(fh)
@@ -224,6 +224,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, fh.read(), ctype)
             elif u.path == "/api/verdicts":
                 self._send(200, load_verdicts(q["path"]))
+            elif u.path == "/api/tuned":
+                tp = os.path.join(STATE["verdicts"], "tuned_settings.json")
+                if not os.path.exists(tp):
+                    self._send(200, dict(error="no tuned_settings.json yet: run python tools/tune.py first"))
+                else:
+                    with open(tp, encoding="utf-8") as fh:
+                        self._send(200, json.load(fh))
             elif u.path == "/api/summary":
                 self._send(200, summary())
             else:
