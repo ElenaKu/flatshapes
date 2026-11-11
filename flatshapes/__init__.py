@@ -14,6 +14,6 @@ from .svg import segments_to_d
 from .detect import detect_shape, detect_shapes, occluders, find_lines, components
 
 from .symmetry import Symmetry, find_symmetry, symmetrize
-from .motifs import Motif, find_motifs, motifs_svg
+from .motifs import Motif, find_motifs, motifs_svg, split_merged
 
 __version__ = "0.1.0"

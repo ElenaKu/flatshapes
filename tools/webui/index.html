@@ -97,7 +97,8 @@ const SETTINGS = {
             ["max_offset", "join offset px", 0, 8, 0.5, 2], ["max_gap", "join gap px", 0, 300, 5, 90]],
   motif:   [["min_iou", "overlay IoU ≥", 0.5, 1, 0.01, 0.85], ["sig_tol", "signature tol", 0.01, 0.3, 0.01, 0.08],
             ["same_colour", "same colour (0/1)", 0, 1, 1, 1], ["allow_scale", "allow scale (0/1)", 0, 1, 1, 1],
-            ["allow_mirror", "allow mirror (0/1)", 0, 1, 1, 1]],
+            ["allow_mirror", "allow mirror (0/1)", 0, 1, 1, 1], ["split", "split stuck copies (0/1)", 0, 1, 1, 1],
+            ["split_cover", "split: cover ≥", 0.5, 1, 0.01, 0.85], ["split_edge", "split: on outline ≥", 0.3, 1, 0.01, 0.65]],
   symmetry:[["rot_iou", "rotation IoU ≥", 0.5, 1, 0.01, 0.9], ["mirror_iou", "mirror IoU ≥", 0.5, 1, 0.01, 0.9]],
 };
 const S = { images: [], cur: -1, data: null, sel: null, verd: { marks: [], missed: [] }, mode: "inspect",
@@ -254,9 +255,9 @@ function drawShapes() {
   if (S.show.motif && S.data.motifs) S.data.motifs.forEach((mo, gi) => {
     for (const it of mo.instances) {
       el("path", { d: "M" + it.pts.map(p => p.join(",")).join("L") + "Z", fill: "none", stroke: KCOL("motif"),
-                   "stroke-width": lw, "stroke-dasharray": it.iou === 1 ? "" : `${5 * px()} ${3 * px()}` }, g).style.pointerEvents = "none";
+                   "stroke-width": it.split ? lw * 2 : lw, "stroke-dasharray": it.iou === 1 || it.split ? "" : `${5 * px()} ${3 * px()}` }, g).style.pointerEvents = "none";
       el("text", { x: it.cx, y: it.cy + 4 * px(), "font-size": 12 * px(), "text-anchor": "middle", fill: KCOL("motif"),
-                   "font-weight": "bold" }, g).textContent = "M" + (gi + 1) + (it.mirrored ? "↔" : "");
+                   "font-weight": "bold" }, g).textContent = "M" + (gi + 1) + (it.mirrored ? "↔" : "") + (it.split ? "✂" : "");
     }
   });
   if (S.inspect && S.inspect.symmetry && S.panel === "inspector") {

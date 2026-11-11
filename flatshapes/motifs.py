@@ -59,12 +59,16 @@ def _describe(m, x0, y0):
                 P=P - c, area=len(xs))
 
 
-def _best_rotation(sa, sb):
-    """Shift k (bins) and error so that sb[i] ~ sa[i - k]."""
+def _best_rotation(sa, sb, n=1):
+    """Shift k (bins) and error so that sb[i] ~ sa[i - k]; with n > 1 the n best shifts (local correlation
+    peaks), best first, as a list."""
     F = np.fft.irfft(np.conj(np.fft.rfft(sa)) * np.fft.rfft(sb), N_SIG)
-    k = int(np.argmax(F))
-    err = float(np.sqrt(np.mean((np.roll(sa, k) - sb) ** 2)))
-    return k, err
+    if n == 1:
+        k = int(np.argmax(F))
+        return k, float(np.sqrt(np.mean((np.roll(sa, k) - sb) ** 2)))
+    peaks = [i for i in range(N_SIG) if F[i] >= F[i - 1] and F[i] >= F[(i + 1) % N_SIG]]
+    peaks = sorted(peaks, key=lambda i: -F[i])[:n]
+    return [(k, float(np.sqrt(np.mean((np.roll(sa, k) - sb) ** 2)))) for k in peaks]
 
 
 def _overlay_iou(da, db, angle, scale, mirrored, shape_pad=4):
@@ -90,13 +94,15 @@ def _overlay_iou(da, db, angle, scale, mirrored, shape_pad=4):
 
 def find_motifs(labels, background=None, min_area=60, same_colour=True, allow_scale=True, allow_mirror=True,
                 desc_tol=0.06, sig_tol=0.08, min_iou=0.85, scale_range=(0.25, 4.0), min_count=2, components=None,
-                template_tol=0.5):
+                template_tol=0.5, split=True, split_kw=None):
     """Groups of repeated shapes in a label map. Returns a list of Motif (largest groups first).
     same_colour: copies must have the same label; allow_scale / allow_mirror: accept resized / mirrored copies;
     desc_tol / sig_tol: signature gates (normalised radius units); min_iou: overlay check of every copy.
-    components: optional output of flatshapes.components(...) to reuse (e.g. with lines removed)."""
+    components: optional output of flatshapes.components(...) to reuse (e.g. with lines removed).
+    split: regions that matched no motif are tried as several copies stuck together (two balloons that touch, a
+    balloon with its string); found copies join the motif with split=True (see split_merged)."""
     from .detect import components as comps_fn
-    comps = components if components is not None else comps_fn(labels, background, min_area, False)
+    comps = list(components if components is not None else comps_fn(labels, background, min_area, False))
     items = []
     for lab, i, m, _hid, x0, y0 in comps:
         d = _describe(m, x0, y0)
@@ -123,17 +129,17 @@ def find_motifs(labels, background=None, min_area=60, same_colour=True, allow_sc
                 continue
             if np.abs(da["desc"] - db["desc"]).max() > desc_tol:
                 continue
-            k, err = _best_rotation(da["sig"], db["sig"])
-            mir = False
+            # a few rotation candidates (near-symmetric shapes - a balloon with a small knot - have a second peak
+            # half a turn away); the overlay decides. The reversed signature is exactly the mirror (x axis).
+            cands = [(k, e, False) for k, e in _best_rotation(da["sig"], db["sig"], 3)]
             if allow_mirror:
-                sm = da["sig"][::-1].copy()
-                km, errm = _best_rotation(sm, db["sig"])
-                if errm < err:
-                    k, err, mir = km, errm, True
-            if err > sig_tol:
+                cands += [(k, e, True) for k, e in _best_rotation(da["sig"][::-1].copy(), db["sig"], 3)]
+            cands = [c for c in cands if c[1] <= sig_tol]
+            if not cands:
                 continue
-            angle = k * 360.0 / N_SIG  # the reversed signature is exactly the mirror (about the x axis)
-            iou = _overlay_iou(da, db, angle, scale, mir)
+            # ties (a mirror-symmetric shape) go to the copy without mirroring
+            _, _, iou, angle, mir = max((round(o, 2), not m, o, k * 360.0 / N_SIG, m) for o, k, m in
+                                        ((_overlay_iou(da, db, k * 360.0 / N_SIG, scale, m), k, m) for k, _, m in cands))
             if iou < min_iou:
                 continue
             group.append(dict(label=db["label"], index=db["index"], cx=float(db["c"][0]), cy=float(db["c"][1]),
@@ -145,8 +151,130 @@ def find_motifs(labels, background=None, min_area=60, same_colour=True, allow_sc
             motifs.append(Motif(template=dict(label=da["label"], index=da["index"], cx=float(da["c"][0]),
                                               cy=float(da["c"][1]), r=da["R"], outline=da["P"]),
                                 instances=group, path=_template_path(da["P"], template_tol)))
+    if split and motifs:
+        left = [(c[0], c[1], c[2], c[4], c[5], c[3]) for c in comps]
+        done = {(it["label"], it["index"]) for mo in motifs for it in mo.instances}
+        left = [c for c in left if (c[0], c[1]) not in done]
+        split_merged(motifs, left, image_shape=np.asarray(labels).shape, **(split_kw or {}))
     motifs.sort(key=lambda m: -m.count)
     return motifs
+
+
+def _template_raster(P, angle, scale, mirrored):
+    """Filled template (outline P around its centroid) transformed; returns mask and centroid position in it."""
+    import cv2
+    A = P.copy()
+    if mirrored:
+        A[:, 1] = -A[:, 1]
+    t = np.radians(angle)
+    R = np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
+    A = (A @ R.T) * scale
+    lo = np.floor(A.min(0)) - 1
+    size = (np.ceil(A.max(0) - lo) + 2).astype(int)
+    m = np.zeros((size[1], size[0]), np.uint8)
+    cv2.fillPoly(m, [np.round((A - lo) * 4).astype(np.int32)], 1, shift=2)
+    return m, -lo
+
+
+def split_merged(motifs, regions, min_inside=0.92, min_cover=0.85, angle_step=10.0, scale_steps=(0.9, 1.0, 1.1),
+                 max_copies=6, area_range=(0.6, 6.0), min_edge=0.65, image_shape=None):
+    """Explain a region as copies of a known motif stuck together. regions: (label, index, mask crop, x0, y0) of
+    the components that matched no motif, optionally with a 6th item: hidden crop (outline covered by objects in
+    front; a copy may extend under it). For each region of a motif's colour, copies are placed greedily: the
+    placement (angle, scale, mirror) that lies inside the region (>= min_inside of the copy), follows the region
+    outline best and covers still unexplained pixels, until the copies cover min_cover of the region. Scales tried: those of the motif's
+    copies times scale_steps. A region explained by >= 1 copy (one copy = the motif with something attached,
+    e.g. a string) adds its copies to the motif (split=True). Returns the number of copies added.
+    A copy must run along the region outline for at least min_edge of its own outline. Motifs that are plain
+    triangles / quadrilaterals are not used: they tile any bar or band (a ribbon would be cut into pieces).
+    image_shape (H, W): where a region touches the image border, copies may extend past it (cut-off copies)."""
+    import cv2
+    added = 0
+    from .polygon import fit_polygon
+    for mo in motifs:
+        T = mo.template
+        tm0, _ = _template_raster(T["outline"], 0.0, 1.0, False)
+        poly = fit_polygon(np.pad(tm0, 3) > 0)
+        if poly is not None and poly.params["k"] <= 4:
+            continue
+        tarea = np.pi * T["r"] ** 2
+        scales = sorted({round(it["scale"] * f, 3) for it in mo.instances for f in scale_steps})
+        mirrors = (False, True) if any(it["mirrored"] for it in mo.instances) else (False,)
+        # the template's own symmetry cuts the search: a dot needs one angle, a 5-point star 72 degrees,
+        # a shape with a mirror axis no mirrored copies
+        from .symmetry import find_symmetry
+        sy = find_symmetry(np.pad(tm0, 3) > 0, max_order=8)
+        turn = 360.0 if sy.round else 360.0 / max(1, sy.order)
+        if sy.axes:
+            mirrors = (False,)
+        rasters = []
+        for sc in scales:
+            for mi in mirrors:
+                for a in (np.arange(0, turn, angle_step) if not sy.round else [0.0]):
+                    tm, off = _template_raster(T["outline"], a, sc, mi)
+                    edge = (tm - cv2.erode(tm, np.ones((3, 3), np.uint8))).astype(np.float32)
+                    rasters.append((a, sc, mi, tm, off, edge))
+        for reg in regions:
+            lab, idx, m, x0, y0 = reg[:5]
+            hid = reg[5] if len(reg) > 5 and reg[5] is not None else np.zeros_like(m)
+            if lab != T["label"]:
+                continue
+            if image_shape is not None:  # room past the image border, counted as hidden
+                pad = int(np.ceil(2 * T["r"] * max(scales))) + 2
+                H, W = image_shape
+                h0, w0 = m.shape
+                sides = (pad if y0 == 0 else 0, pad if y0 + h0 >= H else 0, pad if x0 == 0 else 0,
+                         pad if x0 + w0 >= W else 0)
+                if any(sides):
+                    m = np.pad(m, ((sides[0], sides[1]), (sides[2], sides[3])))
+                    hid = np.pad(hid, ((sides[0], sides[1]), (sides[2], sides[3])), constant_values=True)
+                    x0, y0 = x0 - sides[2], y0 - sides[0]
+            area = int(m.sum())
+            if not area_range[0] * tarea * min(scales) ** 2 <= area <= area_range[1] * tarea * max(scales) ** 2:
+                continue
+            # a copy may extend under objects in front; its outline there counts as matching
+            region = (m | hid).astype(np.float32)
+            m8 = m.astype(np.uint8)
+            band = (cv2.dilate(m8 - cv2.erode(m8, np.ones((3, 3), np.uint8)), np.ones((5, 5), np.uint8)) > 0) & ~hid
+            vis = (~hid).astype(np.float32)
+            todo = m.copy()
+            copies = []
+            while len(copies) < max_copies and todo.sum() > (1 - min_cover) * area:
+                best = None
+                todo_f = todo.astype(np.float32)
+                # outline of a copy behind copies already placed is not visible: it counts as matching there
+                band_now = (band | (~todo & m)).astype(np.float32)
+                for a, sc, mi, tm, off, edge in rasters:
+                    th, tw = tm.shape
+                    if th > m.shape[0] or tw > m.shape[1]:
+                        continue
+                    tf = tm.astype(np.float32)
+                    ta = float(tf.sum())
+                    inside = cv2.matchTemplate(region, tf, cv2.TM_CCORR) / ta
+                    new = cv2.matchTemplate(todo_f, tf, cv2.TM_CCORR)
+                    # a true copy runs along the region outline (except where another copy overlaps it); a copy
+                    # placed across two stuck copies (a balloon lying across two balloons) sits inside them
+                    # judged on the copy's outline that is not hidden (under objects in front, past the border)
+                    e_vis = cv2.matchTemplate(vis, edge, cv2.TM_CCORR)
+                    on_edge = cv2.matchTemplate(band_now, edge, cv2.TM_CCORR) / np.maximum(e_vis, 1.0)
+                    on_edge[e_vis < 0.5 * float(edge.sum())] = 0  # mostly hidden: no evidence
+                    score = on_edge ** 4 * np.sqrt(np.clip(new / ta, 0, 1))
+                    score[(inside < min_inside) | (new < 0.25 * ta) | (on_edge < min_edge)] = -1
+                    k = int(np.argmax(score))
+                    yy, xx = divmod(k, score.shape[1])
+                    if score[yy, xx] > 0 and (best is None or score[yy, xx] > best[0]):
+                        best = (float(score[yy, xx]), a, sc, mi, xx, yy, tm, off, float(inside[yy, xx]))
+                if best is None:
+                    break
+                _, a, sc, mi, xx, yy, tm, off, ins = best
+                th, tw = tm.shape
+                todo[yy:yy + th, xx:xx + tw] &= ~tm.astype(bool)
+                copies.append(dict(label=lab, index=idx, cx=float(x0 + xx + off[0]), cy=float(y0 + yy + off[1]),
+                                   angle=float(a), scale=float(sc), mirrored=bool(mi), iou=round(ins, 4), split=True))
+            if copies and todo.sum() <= (1 - min_cover) * area:
+                mo.instances.extend(copies)
+                added += len(copies)
+    return added
 
 
 def _template_path(P, tol):

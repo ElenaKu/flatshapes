@@ -92,3 +92,25 @@ def test_motifs_rotated_scaled_mirrored():
     mos = fs.find_motifs(L, background=0)
     assert len(mos) == 1 and mos[0].count == 4
     assert sum(i["mirrored"] for i in mos[0].instances) == 3  # template is the mirrored copy
+
+
+def test_split_stuck_copies():
+    import cv2
+
+    def balloon(L, cx, cy, a, sc):
+        t = np.linspace(0, 2 * np.pi, 100)
+        th = np.radians(a)
+        R = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+        for Q in (np.c_[30 * np.cos(t), 40 * np.sin(t)], np.array([[-6, 48], [6, 48], [0, 38]])):
+            cv2.fillPoly(L, [np.round(((Q @ R.T) * sc + [cx, cy]) * 4).astype(np.int32)], 1, shift=2)
+
+    L = np.zeros((500, 600), np.uint8)
+    balloon(L, 80, 80, 0, 1)
+    balloon(L, 250, 90, 15, 1.1)
+    balloon(L, 420, 90, -10, 0.9)
+    balloon(L, 120, 320, -10, 1)   # two balloons stuck together
+    balloon(L, 165, 330, 12, 1.05)
+    mos = fs.find_motifs(L, background=0)
+    split = [i for i in mos[0].instances if i.get("split")]
+    assert len(split) == 2
+    assert sorted(round(i["cx"] / 10) for i in split) == [12, 17]

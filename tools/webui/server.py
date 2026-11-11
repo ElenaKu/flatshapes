@@ -98,13 +98,17 @@ def run_detect(req):
     motifs = []
     if req.get("enabled", {}).get("motif", True):
         mo = req.get("options", {}).get("motif", {})
-        comps = list(fs.components(labels, bg, int(s.get("min_area", 60)), False, lines=lines))
+        comps = list(fs.components(labels, bg, int(s.get("min_area", 60)), True, int(s.get("rim", 4)),
+                                   float(s.get("underlay", 0.5)), lines=lines))
         for gi, m in enumerate(fs.find_motifs(labels, bg, components=comps,
                                               min_iou=float(mo.get("min_iou", 0.85)),
                                               sig_tol=float(mo.get("sig_tol", 0.08)),
                                               same_colour=bool(mo.get("same_colour", 1)),
                                               allow_scale=bool(mo.get("allow_scale", 1)),
-                                              allow_mirror=bool(mo.get("allow_mirror", 1)))):
+                                              allow_mirror=bool(mo.get("allow_mirror", 1)),
+                                              split=bool(mo.get("split", 1)),
+                                              split_kw=dict(min_cover=float(mo.get("split_cover", 0.85)),
+                                                            min_edge=float(mo.get("split_edge", 0.65))))):
             T = m.template["outline"][:: max(1, len(m.template["outline"]) // 80)]
             inst = []
             for it in m.instances:
