@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flatshapes"
+version = "0.1.0"
+description = "Geometric shape detection (lines, arcs, circles, ellipses, polygons, stars) for vectorizing flat illustrations"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = ["numpy", "scipy", "opencv-python", "scikit-image"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools]
+packages = ["flatshapes"]

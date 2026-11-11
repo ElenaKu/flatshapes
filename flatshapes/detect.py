@@ -1,0 +1,90 @@
+"""Shape classification: every detector is tried on a mask and the simplest model whose error is close to the best
+wins (a circle beats an ellipse that is only slightly better, an ellipse beats a 8-point polygon)."""
+import numpy as np
+
+from .circle import fit_circle, equalize_radii
+from .ellipse import fit_ellipse
+from .polygon import fit_polygon
+from .star import fit_star
+
+DETECTORS = {"circle": fit_circle, "ellipse": fit_ellipse, "polygon": fit_polygon, "star": fit_star}
+ORDER = ("circle", "ellipse", "polygon", "star")  # simple -> complex
+
+
+def detect_shape(mask, hidden=None, kinds=ORDER, slack=0.15, options=None):
+    """Best geometric model for one shape mask, or None.
+    kinds:   detectors to try; options: {kind: {kwarg: value}} passed to that detector
+    slack:   a simpler model wins when its mean error is at most `slack` px worse than the best one"""
+    options = options or {}
+    fits = []
+    for k in kinds:
+        f = DETECTORS[k](mask, hidden, **options.get(k, {}))
+        if f is not None:
+            fits.append(f)
+    if not fits:
+        return None
+    best = min(f.metrics["mean"] for f in fits)
+    ok = [f for f in fits if f.metrics["mean"] <= best + slack]
+    return min(ok, key=lambda f: (ORDER.index(f.kind) if f.kind in ORDER else 99, f.n_params))
+
+
+def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, equal_radius=True, colours=None,
+                  **kw):
+    """Run detect_shape on every connected component of every label of a label map (H, W).
+    hidden_by_others: outline that touches another non-background label counts as hidden (the neighbour may be in
+    front). colours: optional {label: CIELAB} for grouping same-size dots. Returns a list of
+    (label, component index, ShapeFit)."""
+    import cv2
+    from scipy import ndimage as ndi
+    L = np.asarray(labels)
+    out = []
+    for lab in np.unique(L):
+        if background is not None and lab == background:
+            continue
+        cc, n = ndi.label(L == lab)
+        for i, sl in enumerate(ndi.find_objects(cc), 1):
+            y0, x0 = max(0, sl[0].start - 3), max(0, sl[1].start - 3)
+            y1, x1 = min(L.shape[0], sl[0].stop + 3), min(L.shape[1], sl[1].stop + 3)
+            m = cc[y0:y1, x0:x1] == i
+            if m.sum() < min_area:
+                continue
+            hid = None
+            if hidden_by_others:
+                other = L[y0:y1, x0:x1] != lab
+                if background is not None:
+                    other &= L[y0:y1, x0:x1] != background
+                hid = cv2.dilate(other.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+            f = detect_shape(m, hid, **kw)
+            if f is None:
+                continue
+            _shift(f, x0, y0, L.shape)
+            out.append((int(lab), i, f))
+    if equal_radius:
+        circ = [f for _, _, f in out if f.kind == "circle"]
+        cols = [colours[l] for l, _, f in out if f.kind == "circle"] if colours else None
+        equalize_radii(circ, cols)
+    return out
+
+
+def _shift(f, dx, dy, shape):
+    """Move a fit from crop to image coordinates (params, path and mask)."""
+    from . import circle, ellipse, star
+    p = f.params
+    if f.kind in ("circle", "ellipse"):
+        p["cx"] += dx
+        p["cy"] += dy
+        f.path = circle.circle_path(p["cx"], p["cy"], p["r"]) if f.kind == "circle" else \
+            ellipse.ellipse_path((p["cx"], p["cy"]), p["a"], p["b"], p["theta"])
+    elif f.kind == "star":
+        p["centre"] = p["centre"] + [dx, dy]
+        p["tips"] = p["tips"] + [dx, dy]
+        f.path = star._path(p["centre"], p["tips"], p["bend"])
+    elif f.kind == "polygon":
+        p["vertices"] = p["vertices"] + [dx, dy]
+        from .result import fmt
+        f.path = "M" + "L".join(fmt(v) for v in p["vertices"]) + "Z"
+    if f.mask is not None:
+        full = np.zeros(shape, bool)
+        h, w = f.mask.shape
+        full[dy:dy + h, dx:dx + w] = f.mask
+        f.mask = full
