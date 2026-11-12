@@ -12,12 +12,22 @@ DETECTORS = {"circle": fit_circle, "ellipse": fit_ellipse, "polygon": fit_polygo
 ORDER = ("circle", "ellipse", "polygon", "star")  # simple -> complex
 
 
-def detect_shape(mask, hidden=None, kinds=ORDER, slack=0.15, options=None):
+def detect_shape(mask, hidden=None, kinds=ORDER, slack=0.15, options=None, prefilter=True, slack_rel=0.5):
     """Best geometric model for one shape mask, or None.
     kinds:   detectors to try; options: {kind: {kwarg: value}} passed to that detector
-    slack:   a simpler model wins when its mean error is at most `slack` px worse than the best one"""
+    slack, slack_rel: a simpler model wins when its mean error is at most best * (1 + slack_rel) + slack px
+             (an 8-vertex polygon with rounded corners hugs a sparkle a little closer than the 4-tip star)
+    prefilter: cheap shape features (features.py) skip detectors that cannot fit (no star fit on a round blob)"""
     options = options or {}
     fits = []
+    if prefilter:
+        from .features import shape_features, candidate_kinds
+        hs = 0.0
+        if hidden is not None:
+            import cv2
+            ring = (cv2.dilate(np.asarray(mask, np.uint8), np.ones((3, 3), np.uint8)) > 0) & ~np.asarray(mask, bool)
+            hs = float(np.asarray(hidden, bool)[ring].mean()) if ring.any() else 0.0
+        kinds = candidate_kinds(shape_features(mask), hs, kinds)
     for k in kinds:
         f = DETECTORS[k](mask, hidden, **options.get(k, {}))
         if f is not None:
@@ -25,7 +35,7 @@ def detect_shape(mask, hidden=None, kinds=ORDER, slack=0.15, options=None):
     if not fits:
         return None
     best = min(f.metrics["mean"] for f in fits)
-    ok = [f for f in fits if f.metrics["mean"] <= best + slack]
+    ok = [f for f in fits if f.metrics["mean"] <= best * (1 + slack_rel) + slack]
     return min(ok, key=lambda f: (f.n_params, f.metrics["mean"]))
 
 

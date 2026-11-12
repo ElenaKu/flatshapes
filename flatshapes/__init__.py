@@ -13,6 +13,7 @@ from .geom import fit_open, fit_closed, reverse_segments, sample_segment
 from .svg import segments_to_d
 from .detect import detect_shape, detect_shapes, occluders, find_lines, components
 
+from .features import shape_features, candidate_kinds
 from .symmetry import Symmetry, find_symmetry, symmetrize
 from .motifs import Motif, find_motifs, motifs_svg, split_merged
 

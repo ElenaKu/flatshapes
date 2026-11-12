@@ -70,11 +70,37 @@ def fit_polygon(mask, hidden=None, max_sides=12, eps_rel=0.02, max_mean=0.8, max
     # one corner radius for all corners (how designers round shapes): grid search, keep the best
     best = None
     rmax = 0.5 * sides.min() if round_corners else 0.0
-    for r in (np.linspace(0, rmax, 25) if rmax > 0 else [0.0]):
-        dense, segs = _rounded(V, r)
-        if dense is None:
+    from scipy.spatial import cKDTree
+    Pfull, vfull = outline_points(K, hidden)  # once: the radius search below only moves the model
+    Pq = Pfull[vfull]
+    if not len(Pq):
+        return None
+
+    def metrics_of(dense):
+        d, _ = cKDTree(dense).query(Pq)
+        return dict(mean=float(d.mean()), p80=float(np.percentile(d, 80)), max=float(d.max()),
+                    visible=float(vfull.mean()))
+
+    # coarse radius grid, then a finer one around the best
+    grid = list(np.linspace(0, rmax, 9)) if rmax > 0 else [0.0]
+    tried = {}
+    for stage in range(2):
+        for r in grid:
+            r = float(r)
+            if r in tried:
+                continue
+            dense, segs = _rounded(V, r)
+            tried[r] = None if dense is None else (metrics_of(dense), dense, segs)
+        ok = [(v[0]["mean"], r) for r, v in tried.items() if v is not None]
+        if not ok or rmax <= 0:
+            break
+        r0 = min(ok)[1]
+        step = rmax / 8
+        grid = list(np.clip(np.linspace(r0 - step, r0 + step, 7), 0, rmax))
+    for r, v in tried.items():
+        if v is None:
             continue
-        met = outline_metrics(K, hidden, dense)
+        met, dense, segs = v
         if best is None or met["mean"] < best[1]["mean"] - 1e-6:
             best = (r, met, dense, segs)
     if best is None:

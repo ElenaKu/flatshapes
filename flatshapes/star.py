@@ -21,13 +21,16 @@ def _bez(p0, p1, p2, p3, t):
 
 
 def _model(C, T, b, ns=40):
-    k = len(T)
-    t = np.linspace(0, 1, ns, endpoint=False)
-    pts = []
-    for i in range(k):
-        a, z = T[i], T[(i + 1) % k]
-        pts.append(_bez(a, a + b[i] * (C - a), z + b[i] * (C - z), z, t))
-    return np.vstack(pts)
+    """Outline points of the star model, ns per side (vectorised over the sides)."""
+    T = np.asarray(T, float)
+    C = np.asarray(C, float)
+    b = np.asarray(b, float)[:, None]
+    A, Z = T, np.roll(T, -1, axis=0)
+    P1, P2 = A + b * (C - A), Z + b * (C - Z)
+    t = np.linspace(0, 1, ns, endpoint=False)[None, :, None]
+    s = 1 - t
+    pts = s ** 3 * A[:, None] + 3 * s * s * t * P1[:, None] + 3 * s * t * t * P2[:, None] + t ** 3 * Z[:, None]
+    return pts.reshape(-1, 2)
 
 
 def _path(C, T, b):
@@ -159,8 +162,7 @@ def _fit_star(K, occ, off, size, min_ratio, max_mean, max_p80, best_share, k_ran
 
     def resid(x):
         C, T_, b = unpack(x)
-        tree = cKDTree(_model(C, T_, b))
-        dd, _ = tree.query(Pv)
+        dd, _ = cKDTree(_model(C, T_, b)).query(Pv)
         prior_t = (wt[:, None] * (T_ - T0)).ravel()
         prior_b = 0.5 * (b - b.mean())
         return np.r_[dd, prior_t, prior_b]
