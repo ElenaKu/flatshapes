@@ -171,12 +171,18 @@ def run_detect(req):
         lo = req.get("options", {}).get("line", {})
         kw = {k: lo[k] for k in ("max_angle", "max_offset", "max_gap", "min_len", "max_width", "body_r") if k in lo}
         lines = fs.find_lines(labels, background=bg, **kw)
+    use_model = bool(s.get("classifier", 1))
+    import time as _time
+    t_fit = _time.perf_counter()
     found = fs.detect_shapes(labels, background=bg, min_area=int(s.get("min_area", 60)), rim=int(s.get("rim", 4)),
                              underlay_share=float(s.get("underlay", 0.5)), lines=lines, workers=None,
+                             classifier=use_model,
                              kinds=kinds, slack=float(s.get("slack", 0.15)), options=opts,
                              colours={i: cols[i] for i in range(len(cols))}) if kinds else []
+    t_fit = _time.perf_counter() - t_fit
     shapes = [_shape_json(f, lab, f"s{n}") for n, (lab, _, f) in enumerate(found)]
     shapes += [_shape_json(f, lab, f"l{n}") for n, (lab, f) in enumerate(lines)]
+    regions = model_map(labels, bg, s, lines) if req.get("enabled", {}).get("model", False) else []
     motifs = []
     if req.get("enabled", {}).get("motif", True):
         mo = req.get("options", {}).get("motif", {})
@@ -203,8 +209,46 @@ def run_detect(req):
                 inst.append({**{k: _jsonable(v) for k, v in it.items()}, "pts": np.round(A, 1).tolist()})
             motifs.append(dict(id=f"m{gi}", count=m.count, instances=inst, path=m.path))
     h, w = labels.shape
-    return dict(shapes=shapes, motifs=motifs, width=w, height=h, background=bg,
-                palette=[_lab_to_hex(c) for c in cols])
+    return dict(shapes=shapes, motifs=motifs, width=w, height=h, background=bg, regions=regions,
+                fit_seconds=round(t_fit, 2), classifier_available=model_available(),
+                classifier_used=use_model and model_available(), palette=[_lab_to_hex(c) for c in cols])
+
+
+def model_available():
+    from flatshapes import classifier as C
+    return C.load() is not None
+
+
+def _decision(probs, classes):
+    from flatshapes import classifier as C
+    k = C.kinds_from_probs(probs, classes)
+    if k is None:
+        return "unsure", "the model is not sure: feature rules pick the detectors"
+    if k == ():
+        return "skip", "sure it is not a simple shape: no fit"
+    return "model", "only " + " + ".join(k) + " fitted"
+
+
+def model_map(labels, bg, s, lines):
+    """Every region as detect_shapes sees it, with the model's answer: outline, top class, probability, decision."""
+    import cv2 as _cv
+    from flatshapes import classifier as C
+    comps = list(fs.components(labels, bg, int(s.get("min_area", 60)), True, int(s.get("rim", 4)),
+                               float(s.get("underlay", 0.5)), lines=lines))
+    probs, classes = C.classify([(c[2], c[3]) for c in comps])
+    if probs is None:
+        return []
+    out = []
+    for (lab, i, m, hid, x0, y0), p in zip(comps, probs):
+        cs, _ = _cv.findContours(m.astype(np.uint8), _cv.RETR_EXTERNAL, _cv.CHAIN_APPROX_SIMPLE)
+        if not cs:
+            continue
+        c = max(cs, key=_cv.contourArea)
+        c = _cv.approxPolyDP(c, 0.8, True).reshape(-1, 2) + [x0 + 0.5, y0 + 0.5]
+        top = int(np.argmax(p))
+        dec, _ = _decision(p, classes)
+        out.append(dict(pts=np.round(c, 1).tolist(), cls=classes[top], p=round(float(p[top]), 3), decision=dec))
+    return out
 
 
 def _lab_to_hex(c):
@@ -251,6 +295,22 @@ def run_inspect(req):
             entry["note"] = "no model could be fitted (too few outline points, wrong number of tips/sides, ...)"
         models.append(entry)
     best = fs_detect.detect_shape(m, hid, kinds=KINDS, slack=float(s.get("slack", 0.15)), options=opts)
+    model = None
+    try:
+        from flatshapes import classifier as C
+        if C.load() is not None:
+            # the region exactly as detect_shapes sees it (strings taken out, same hidden mask)
+            lns = fs.find_lines(labels, background=bg)
+            for clab, ci, cm, chid, cx0, cy0 in fs.components(labels, bg, 1, True, int(s.get("rim", 4)),
+                                                              float(s.get("underlay", 0.5)), lines=lns):
+                if clab == lab and 0 <= y - cy0 < cm.shape[0] and 0 <= x - cx0 < cm.shape[1] and cm[y - cy0, x - cx0]:
+                    pr, classes = C.classify([(cm, chid)])
+                    dec, text = _decision(pr[0], classes)
+                    model = dict(probs={c: round(float(v), 3) for c, v in sorted(zip(classes, pr[0]), key=lambda t: -t[1])},
+                                 decision=dec, text=text, used=bool(s.get("classifier", 1)))
+                    break
+    except Exception as e:  # never break the inspector over the model
+        model = dict(error=str(e))
     so = opts.get("symmetry", {})
     sym = fs.find_symmetry(m, hid, rot_iou=float(so.get("rot_iou", 0.9)), mirror_iou=float(so.get("mirror_iou", 0.9)))
     symd = dict(kind=sym.kind, order=sym.order, rot_score=round(float(sym.rot_score), 3), axes=sym.axes,
@@ -264,6 +324,7 @@ def run_inspect(req):
             symd["symmetrized"] = (max(cs, key=len).reshape(-1, 2) + [x0 + 0.5, y0 + 0.5]).tolist()
     return dict(label=lab, colour=_lab_to_hex(cols[lab]), area=int(comp.sum()), bbox=[int(x0), int(y0), int(x1), int(y1)],
                 hidden_share=float(hid.mean()), chosen=best.kind if best else None, models=models, symmetry=symd,
+                classifier=model,
                 min_area=int(s.get("min_area", 60)))
 
 

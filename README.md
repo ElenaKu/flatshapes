@@ -128,6 +128,9 @@ nothing extra to install):
 - file list of IMAGE_DIR (subfolders included); detected shapes drawn over the image, kinds toggled with tabs;
   wheel to zoom, drag to pan, `F` to fit
 - **Settings**: sliders for every detector limit (tabs per detector), detection re-runs on each change
+- **Model**: tabs on / off to compare detection with and without the region classifier (time shown in the
+  status line); **model map** (Show tabs) paints every region with the model's guess - grey = unsure (feature
+  rules decide), dashed = skipped as not a shape
 - **Inspector**: click any spot to see every model fitted to that region, its errors and pass / fail, and draw it
 - **Verdicts**: mark shapes correct (`C`) / wrong (`X`), mark missed shapes by kind; saved as JSON under
   VERDICT_DIR with the same folder structure (default IMAGE_DIR/../flatshapes_verdicts), totals and precision per kind

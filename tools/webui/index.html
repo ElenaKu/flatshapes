@@ -5,7 +5,7 @@
 <title>flatshapes test bench</title>
 <style>
   :root { --bg:#16171a; --panel:#1f2024; --line:#33353b; --text:#e6e6e6; --dim:#9a9ca3; --acc:#e0b04c;
-          --ok:#4cd07d; --bad:#ff5a5a; --circle:#00e5ff; --ellipse:#3d7bff; --polygon:#22c55e; --star:#ff3df2; --line-k:#ff9a1f; --motif:#ffe14d; --sym:#7dffb0; --ring:#c8ffc8; --segment:#00ffc8; --teardrop:#7ab4ff; --heart:#ff5078; --crescent:#ffe600; }
+          --ok:#4cd07d; --bad:#ff5a5a; --circle:#00e5ff; --ellipse:#3d7bff; --polygon:#22c55e; --star:#ff3df2; --line-k:#ff9a1f; --motif:#ffe14d; --model:#ffffff; --sym:#7dffb0; --ring:#c8ffc8; --segment:#00ffc8; --teardrop:#7ab4ff; --heart:#ff5078; --crescent:#ffe600; }
   * { box-sizing:border-box; }
   body { margin:0; font:13px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--text); height:100vh;
          display:grid; grid-template-columns:240px 1fr 330px; grid-template-rows:auto 1fr; }
@@ -72,6 +72,8 @@
   <b>flatshapes</b>
   <div class="tabs" id="modeTabs"></div>
   <div class="tabs" id="missedTabs" style="display:none"></div>
+  <span class="muted">Model:</span>
+  <div class="tabs" id="modelTabs"></div>
   <span class="muted">Show:</span>
   <div class="tabs" id="kindTabs"></div>
   <span class="muted" id="counts"></span>
@@ -99,7 +101,7 @@
   <div id="panelVerdicts" style="display:none"></div>
 </div>
 <script>
-const KINDS = ["circle", "ellipse", "polygon", "star", "ring", "segment", "teardrop", "heart", "crescent", "line", "motif"];
+const KINDS = ["circle", "ellipse", "polygon", "star", "ring", "segment", "teardrop", "heart", "crescent", "line", "motif", "model"];
 const SHAPE_KINDS = ["circle", "ellipse", "polygon", "star", "ring", "segment", "teardrop", "heart", "crescent", "line"];
 const KCOL = k => getComputedStyle(document.documentElement).getPropertyValue(k === "line" ? "--line-k" : "--" + k).trim();
 // slider definitions: [key, label, min, max, step, default]
@@ -136,7 +138,8 @@ const SETTINGS = {
 const S = { images: [], cur: -1, data: null, sel: null, verd: { marks: [], missed: [] }, mode: "inspect",
             missedKind: "circle", show: Object.fromEntries(KINDS.map(k => [k, true])), panel: "settings",
             group: "general", vb: null, inspect: null,
-            values: {}, enabled: Object.fromEntries(KINDS.map(k => [k, true])) };
+            values: {}, enabled: Object.fromEntries(KINDS.map(k => [k, true])), useModel: true };
+S.show.model = false;
 for (const [g, rows] of Object.entries(SETTINGS)) { S.values[g] = {}; for (const r of rows) S.values[g][r[0]] = r[5]; }
 try { const saved = JSON.parse(localStorage.getItem("fs_settings") || "null");
       if (saved) { for (const g in saved.values) Object.assign(S.values[g] || {}, saved.values[g]); Object.assign(S.enabled, saved.enabled || {}); } } catch (e) {}
@@ -170,7 +173,11 @@ function drawHeader() {
   tabs($("modeTabs"), [["inspect", "Inspect"], ["missed", "Mark missed"]], k => S.mode === k, k => { S.mode = k; drawHeader(); });
   $("missedTabs").style.display = S.mode === "missed" ? "flex" : "none";
   tabs($("missedTabs"), SHAPE_KINDS.map(k => [k, k, KCOL(k)]), k => S.missedKind === k, k => { S.missedKind = k; drawHeader(); }, "kind");
-  tabs($("kindTabs"), KINDS.map(k => [k, k, KCOL(k)]), k => S.show[k], k => { S.show[k] = !S.show[k]; drawHeader(); drawShapes(); }, "kind");
+  tabs($("kindTabs"), KINDS.map(k => [k, k === "model" ? "model map" : k, KCOL(k)]), k => S.show[k],
+       k => { S.show[k] = !S.show[k]; drawHeader(); if (k === "model" && S.show.model) detect(false, false); else drawShapes(); }, "kind");
+  tabs($("modelTabs"), [["on", "on"], ["off", "off"]], k => (k === "on") === S.useModel,
+       k => { S.useModel = k === "on"; drawHeader(); detect(false, true); });
+  if (S.data && !S.data.classifier_available) $("modelTabs").title = "no model: put region_classifier.onnx in flatshapes/models and pip install onnxruntime";
   if (S.data) {
     const c = {}; for (const s of S.data.shapes) c[s.kind] = (c[s.kind] || 0) + 1;
     if (S.data.motifs && S.data.motifs.length) c.motif = S.data.motifs.length + " groups / " + S.data.motifs.reduce((a, m) => a + m.count, 0) + " copies";
@@ -286,7 +293,8 @@ function changed() {
 }
 function reqBase() {
   const options = {}; for (const k of [...KINDS, "symmetry"]) options[k] = S.values[k];
-  return { path: S.images[S.cur], settings: S.values.general, options, enabled: S.enabled };
+  return { path: S.images[S.cur], settings: { ...S.values.general, classifier: S.useModel ? 1 : 0 }, options,
+           enabled: { ...S.enabled, model: !!S.show.model } };
 }
 
 // ---------- viewer ----------
@@ -314,6 +322,16 @@ function drawShapes() {
   if (!S.data) return;
   let g = svg.querySelector("#ov"); if (g) g.remove(); g = el("g", { id: "ov" }, svg);
   const lw = 2 * px();
+  if (S.show.model && S.data.regions) for (const r of S.data.regions) {
+    const col = r.decision === "unsure" ? "#9a9ca3" : (r.cls === "none" ? "#ff5a5a" : KCOL(r.cls));
+    const d = "M" + r.pts.map(p => p.join(",")).join("L") + "Z";
+    const e = el("path", { d, fill: col + (r.decision === "unsure" ? "33" : "55"), stroke: col, "stroke-width": lw * 0.6,
+                           "stroke-dasharray": r.decision === "skip" ? `${3 * px()} ${2 * px()}` : "" }, g);
+    e.style.pointerEvents = "none";
+    const c = r.pts.reduce((a, p) => [a[0] + p[0] / r.pts.length, a[1] + p[1] / r.pts.length], [0, 0]);
+    el("text", { x: c[0], y: c[1], "font-size": 10 * px(), "text-anchor": "middle", fill: "#fff" }, g).textContent =
+      (r.decision === "skip" ? "✕ " : r.decision === "unsure" ? "? " : "") + r.cls + " " + r.p.toFixed(2);
+  }
   for (const s of S.data.shapes) {
     if (!S.show[s.kind]) continue;
     const d = "M" + s.pts.map(p => p.join(",")).join("L") + (s.closed ? "Z" : "");
@@ -398,13 +416,22 @@ function drawInspector() {
        const extra = [m.k ? "k=" + m.k : "", mt.area_err != null ? "area " + (mt.area_err * 100).toFixed(1) + "%" : "", mt.visible != null ? "vis " + (mt.visible * 100).toFixed(0) + "%" : ""].filter(Boolean).join(" ");
        return `<tr data-k="${m.kind}" style="cursor:pointer"><td style="color:${KCOL(m.kind)}">${m.kind}</td><td>${fmtV(mt.mean)}</td><td>${fmtV(mt.p80)}</td><td class="muted">${m.note ? "no fit" : extra}</td>
                <td class="${m.passed ? "pass" : "fail"}">${m.passed ? "pass" : "fail"}</td></tr>`; }).join("")}
-    </table>${symBlock(I.symmetry)}<div class="muted" style="margin-top:4px">Hover a row to draw that model (white dashed). Failed models are fitted with limits lifted, so you can see how far they are from passing. Compare with the limits in Settings.</div>`;
+    </table>${modelBlock(I.classifier)}${symBlock(I.symmetry)}<div class="muted" style="margin-top:4px">Hover a row to draw that model (white dashed). Failed models are fitted with limits lifted, so you can see how far they are from passing. Compare with the limits in Settings.</div>`;
   const bs = sec2.querySelector("#bSym"); if (bs) bs.onclick = () => { S.inspect.showSym = !S.inspect.showSym; drawShapes(); drawInspector(); };
   sec2.querySelectorAll("tr[data-k]").forEach(tr => {
     tr.onmouseenter = () => { S.inspect.hover = tr.dataset.k; drawShapes(); };
     tr.onmouseleave = () => { S.inspect.hover = null; drawShapes(); };
     tr.onclick = () => { S.panel = "settings"; S.group = tr.dataset.k; drawPanels(); };
   });
+}
+function modelBlock(m) {
+  if (!m) return `<h3 style="margin-top:10px">Model</h3><div class="muted">no model loaded (flatshapes/models/region_classifier.onnx + onnxruntime)</div>`;
+  if (m.error) return `<h3 style="margin-top:10px">Model</h3><div class="fail">${m.error}</div>`;
+  const col = { model: "pass", skip: "fail", unsure: "muted" }[m.decision];
+  const rows = Object.entries(m.probs).slice(0, 5).map(([c, v]) =>
+    `<tr><td style="color:${c === "none" ? "#ff5a5a" : KCOL(c)}">${c}</td><td><div style="background:${c === "none" ? "#ff5a5a" : KCOL(c)};height:8px;width:${Math.round(v * 140)}px"></div></td><td>${v.toFixed(3)}</td></tr>`).join("");
+  return `<h3 style="margin-top:10px">Model ${m.used ? "" : "(off: shown for comparison)"}</h3>
+    <table>${rows}</table><div class="${col}" style="margin-top:3px">${m.text}</div>`;
 }
 function symBlock(sy) {
   if (!sy) return "";
@@ -474,6 +501,7 @@ async function detect(refit, fromSettings) {
   finally { busy(false); }
   const secs = ((performance.now() - t0) / 1000).toFixed(1);
   status(`${S.images[S.cur]} · ${S.data.width}×${S.data.height} · ${secs} s · updated ${new Date().toLocaleTimeString()}`);
+  if (S.data.fit_seconds != null) status($("status").textContent + ` · shapes ${S.data.fit_seconds} s, model ${S.data.classifier_used ? "on" : (S.data.classifier_available ? "off" : "not installed")}`);
   if (fromSettings && before) {
     const after = countKinds(S.data), diff = KINDS.filter(k => (before[k] || 0) !== (after[k] || 0))
       .map(k => `${k} ${before[k] || 0}→${after[k] || 0}`);
