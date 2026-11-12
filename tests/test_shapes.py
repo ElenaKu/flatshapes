@@ -139,3 +139,22 @@ def test_new_simple_shapes():
     for kind, m in cases.items():
         f = fs.detect_shape(m)
         assert f is not None and f.kind == kind, (kind, f and f.kind)
+
+
+def test_circles_from_pieces():
+    import cv2
+    m = np.zeros((200, 260), np.uint8)
+    cv2.circle(m, (70, 100), 40, 1, -1)   # two dots stuck together: one region
+    cv2.circle(m, (130, 100), 28, 1, -1)
+    cs = fs.circles_in_region(m > 0)
+    assert sorted(round(c.params["r"]) for c in cs) == [28, 40]
+
+
+def test_occluded_polygon():
+    import cv2
+    m = np.zeros((200, 200), np.uint8)
+    cv2.fillPoly(m, [np.array([(40, 40), (160, 50), (150, 170), (35, 160)], np.int32)], 1)
+    hid = np.zeros_like(m)
+    cv2.circle(hid, (150, 165), 25, 1, -1)  # a disc in front covers one corner
+    f = fs.fit_polygon((m > 0) & (hid == 0), hid > 0)
+    assert f is not None and f.params["k"] == 4

@@ -21,6 +21,93 @@ def _intersect(c1, d1, c2, d2):
     return c1 + t[0] * d1
 
 
+def _sides_full(P, vis, peri, eps_rel, max_sides):
+    """Side lines (centre, direction) in outline order from Douglas-Peucker corners of the whole outline."""
+    import cv2
+    approx = cv2.approxPolyDP(P.astype(np.float32).reshape(-1, 1, 2), eps_rel * peri, True).reshape(-1, 2)
+    k = len(approx)
+    if not 3 <= k <= max_sides:
+        return None
+    ci = sorted(int(np.argmin(np.linalg.norm(P - v, axis=1))) for v in approx)  # outline index of each corner
+    lines = []
+    n = len(P)
+    for i in range(k):
+        a, b = ci[i], ci[(i + 1) % k]
+        idx = np.arange(a, b if b > a else b + n) % n
+        m = max(1, len(idx) // 8)  # leave the rounded corner ends out of the side fit
+        idx = idx[m:-m] if len(idx) > 2 * m + 2 else idx
+        idx = idx[vis[idx]]
+        if len(idx) < 3:
+            return None
+        lines.append(_line_fit(P[idx]))
+    return lines
+
+
+def _sides_from_pieces(K, P, vis, peri, eps_rel, max_sides, min_side, max_angle=6.0, max_offset=1.5):
+    """Side lines from the visible runs of the outline: each run is cut into straight pieces (Douglas-Peucker),
+    pieces of one side seen on both sides of an object in front are joined, and the sides are ordered by angle
+    around the shape centre."""
+    import cv2
+    n = len(P)
+    if vis.mean() < 0.4:
+        return None
+    start = int(np.argmin(vis))  # start the walk on a hidden point so runs do not wrap
+    order = np.roll(np.arange(n), -start)
+    runs, cur = [], []
+    for i in order:
+        if vis[i]:
+            cur.append(i)
+        elif cur:
+            runs.append(cur)
+            cur = []
+    if cur:
+        runs.append(cur)
+    pieces = []
+    for r in runs:
+        Q = P[r]
+        if len(Q) < 6:
+            continue
+        ap = cv2.approxPolyDP(Q.astype(np.float32).reshape(-1, 1, 2), eps_rel * peri, False).reshape(-1, 2)
+        ids = [int(np.argmin(np.linalg.norm(Q - v, axis=1))) for v in ap]
+        for a, b in zip(ids, ids[1:]):
+            if b - a < 4 or np.linalg.norm(Q[b] - Q[a]) < min_side:
+                continue
+            m = max(1, (b - a) // 8)
+            pts = Q[a + m:b - m + 1] if b - a > 2 * m + 2 else Q[a:b + 1]
+            c, d = _line_fit(pts)
+            res = np.abs((pts - c) @ np.array([-d[1], d[0]]))
+            if res.max() > 1.5:  # not straight: a curved bit, not a side
+                continue
+            pieces.append([c, d, pts])
+    # join pieces lying on one line
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(pieces)):
+            for j in range(i + 1, len(pieces)):
+                ci_, di = pieces[i][0], pieces[i][1]
+                cj, dj = pieces[j][0], pieces[j][1]
+                if np.degrees(np.arccos(min(1.0, abs(float(di @ dj))))) > max_angle:
+                    continue
+                nrm = np.array([-di[1], di[0]])
+                if abs(float((cj - ci_) @ nrm)) > max_offset:
+                    continue
+                pts = np.vstack([pieces[i][2], pieces[j][2]])
+                c, d = _line_fit(pts)
+                pieces[i] = [c, d, pts]
+                pieces.pop(j)
+                merged = True
+                break
+            if merged:
+                break
+    if not 3 <= len(pieces) <= max_sides:
+        return None
+    ys, xs = np.nonzero(K)
+    cen = np.array([xs.mean(), ys.mean()]) + 0.5
+    pieces.sort(key=lambda p: np.arctan2(p[0][1] - cen[1], p[0][0] - cen[0]))
+    return [(p[0], p[1]) for p in pieces]
+
+
 def fit_polygon(mask, hidden=None, max_sides=12, eps_rel=0.02, max_mean=0.8, max_p80=1.3, min_side=4.0,
                 round_corners=True, rel_mean=0.022, rel_p80=0.035, shallow_turn=25.0):
     """Polygon fitted to one shape mask, corners optionally rounded with one common radius. Returns
@@ -33,23 +120,14 @@ def fit_polygon(mask, hidden=None, max_sides=12, eps_rel=0.02, max_mean=0.8, max
     if len(P) < 12:
         return None
     peri = float(np.linalg.norm(np.diff(np.vstack([P, P[:1]]), axis=0), axis=1).sum())
-    approx = cv2.approxPolyDP(P.astype(np.float32).reshape(-1, 1, 2), eps_rel * peri, True).reshape(-1, 2)
-    k = len(approx)
-    if not 3 <= k <= max_sides:
+    lines = _sides_full(P, vis, peri, eps_rel, max_sides)
+    if lines is None and vis.mean() < 0.97:
+        # a good share of the outline is under objects in front: build the sides from the visible pieces only
+        # (a covered corner comes back as the crossing of its two sides)
+        lines = _sides_from_pieces(K, P, vis, peri, eps_rel, max_sides, min_side)
+    if lines is None:
         return None
-    # outline index of each approximate corner
-    ci = sorted(int(np.argmin(np.linalg.norm(P - v, axis=1))) for v in approx)
-    lines = []
-    n = len(P)
-    for i in range(k):
-        a, b = ci[i], ci[(i + 1) % k]
-        idx = np.arange(a, b if b > a else b + n) % n
-        m = max(1, len(idx) // 8)  # leave the rounded corner ends out of the side fit
-        idx = idx[m:-m] if len(idx) > 2 * m + 2 else idx
-        idx = idx[vis[idx]]
-        if len(idx) < 3:
-            return None
-        lines.append(_line_fit(P[idx]))
+    k = len(lines)
     V = []
     for i in range(k):
         v = _intersect(*lines[i - 1], *lines[i])

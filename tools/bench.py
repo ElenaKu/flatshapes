@@ -137,6 +137,13 @@ def random_shape(rng, kind=None):
     return "star", "sparkle", P, r * 0.55, {"k": k}
 
 
+def _area_centre(P):
+    """Area centroid of a closed polygon (the same for truth and detection, whatever the vertex spacing)."""
+    import cv2
+    m = cv2.moments(np.asarray(P, np.float32).reshape(-1, 1, 2))
+    return np.array([m["m10"] / m["m00"], m["m01"] / m["m00"]]) if m["m00"] else np.asarray(P).mean(0)
+
+
 def _fill(canvas, P, label):
     cv2.fillPoly(canvas, [np.round(P * SS).astype(np.int32)], int(label))
 
@@ -170,7 +177,8 @@ def make_scene(rng, n_shapes=(6, 11)):
             cv2.fillPoly(hm, [hole], 1)
             big[hm > 0] = 0
         placed.append((c, R))
-        truth.append(dict(kind=kind, sub=sub, cx=float(c[0]), cy=float(c[1]), size=float(size), label=label,
+        cc = _area_centre(P) + c if kind == "polygon" else c  # polygons: area centre (jittered triangles)
+        truth.append(dict(kind=kind, sub=sub, cx=float(cc[0]), cy=float(cc[1]), size=float(size), label=label,
                           occluded=False, **{k: float(v) for k, v in extra.items()}))
         # partly covered by a shape in front (another colour)
         if rng.random() < 0.2:
@@ -191,6 +199,32 @@ def make_scene(rng, n_shapes=(6, 11)):
             cv2.line(big, tuple(np.round((c - d) * SS).astype(int)), tuple(np.round((c + d) * SS).astype(int)),
                      label, int(w * SS))
             truth[-1]["string"] = True
+    # a dot stuck to another shape of the same colour (one region: found only from outline pieces)
+    for _ in range(int(rng.integers(0, 3))):
+        r = rng.uniform(10, 30)
+        c = rng.uniform(60, SIZE - 60, 2)
+        if any(np.linalg.norm(c - q) < 3 * r + rq for q, rq in placed):
+            continue
+        label = int(rng.integers(1, 7))
+        t = np.linspace(0, 2 * np.pi, 160, endpoint=False)
+        _fill(big, c + np.c_[r * np.cos(t), r * np.sin(t)], label)
+        ang = rng.uniform(0, 2 * np.pi)
+        u = np.array([np.cos(ang), np.sin(ang)])
+        if rng.random() < 0.5:  # touching a second, smaller dot
+            r2 = r * rng.uniform(0.5, 0.9)
+            c2 = c + u * (r + r2 * 0.6)
+            _fill(big, c2 + np.c_[r2 * np.cos(t), r2 * np.sin(t)], label)
+            truth.append(dict(kind="circle", sub="circle stuck", cx=float(c2[0]), cy=float(c2[1]), size=float(r2),
+                              label=label, occluded=False))
+        else:  # a bar running out of it
+            v = np.array([-u[1], u[0]])
+            w = r * 0.5
+            a0, a1 = c + u * r * 0.6, c + u * r * 2.6
+            _fill(big, np.array([a0 - v * w / 2, a1 - v * w / 2, a1 + v * w / 2, a0 + v * w / 2]), label)
+        truth.append(dict(kind="circle", sub="circle stuck", cx=float(c[0]), cy=float(c[1]), size=float(r),
+                          label=label, occluded=False))
+        placed.append((c, 3 * r))
+
     # free thick lines
     for _ in range(int(rng.integers(0, 3))):
         p0 = rng.uniform(20, SIZE - 20, 2)
@@ -219,7 +253,7 @@ def detect(labels, background=0):
         elif f.kind == "star":
             c = tuple(p["centre"])
         else:
-            c = tuple(np.asarray(p["vertices"]).mean(0))
+            c = tuple(_area_centre(p["vertices"]))
         out.append(dict(kind=f.kind, cx=float(c[0]), cy=float(c[1]), label=int(lab), k=p.get("k")))
     for lab, f in lines:
         p0, p1 = f.params["p0"], f.params["p1"]

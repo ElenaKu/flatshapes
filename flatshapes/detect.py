@@ -49,7 +49,7 @@ def detect_shape(mask, hidden=None, kinds=ORDER, slack=0.15, options=None, prefi
 
 
 def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, equal_radius=True, colours=None, rim=4,
-                  underlay_share=0.5, lines=None, line_pad=3.0, workers=1, **kw):
+                  underlay_share=0.5, lines=None, line_pad=3.0, workers=1, pieces=True, **kw):
     """Run detect_shape on every connected component of every label of a label map (H, W).
     hidden_by_others: outline that touches another non-background label counts as hidden (the neighbour may be in
     front); parts of another label thinner than `rim` px (anti-aliasing fringes) do not count, nor does a label
@@ -58,6 +58,7 @@ def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, e
     count as objects in front, so a star with strings glued to it is fitted as a star. colours:
     optional {label: CIELAB} for grouping same-size dots. Returns a list of
     (label, component index, ShapeFit).
+    pieces: regions that fit no shape are searched for circles in their outline pieces (circles_in_region).
     workers: processes for the per-region fits (1 = none, None or 0 = all cores); the pool is started once and
     reused. On Windows the calling script needs the usual `if __name__ == "__main__":` guard."""
     out = []
@@ -72,6 +73,24 @@ def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, e
         fits = {j: detect_shape(c[2], c[3], **kw) for j, c in enumerate(comps)}
     for j, (lab, i, m, hid, x0, y0) in enumerate(comps):
         f = fits[j]
+        # a region that fits no simple shape - or only a many-cornered / rounded polygon, which can wrap two
+        # stuck dots - is searched for circles in its outline pieces; circles that cover at least half of it win
+        if pieces and (f is None or (f.kind == "polygon" and (f.params.get("corner_r", 0) > 0 or f.params["k"] >= 5))):
+            from .circle import circles_in_region
+            cs = circles_in_region(m, hid)
+            if cs:
+                cover = np.zeros(m.shape, bool)
+                for cf in cs:
+                    cover |= cf.mask
+                share = (cover & m).sum() / max(1, m.sum())
+                # one circle that is (nearly) the whole region is just the region: the shape fit above decides
+                # (a small octagon is close to a circle); stuck shapes leave part of the region outside the circles
+                single = len(cs) == 1 and share >= 0.88
+                if f is None or (share >= 0.5 and not single):
+                    for cf in cs:
+                        _shift(cf, x0, y0, np.asarray(labels).shape)
+                        out.append((lab, i, cf))
+                    continue
         if f is None:
             continue
         _shift(f, x0, y0, np.asarray(labels).shape)
@@ -105,7 +124,7 @@ def _detect_task(m, hid, kw):
 
 
 def components(labels, background=None, min_area=40, hidden_by_others=True, rim=4, underlay_share=0.5, lines=None,
-               line_pad=3.0):
+               line_pad=3.0, body_r=5):
     """Connected components of every label, as detect_shapes sees them: yields (label, index, mask crop, hidden
     crop or None, x0, y0). Line strips (see detect_shapes) are removed from the masks and added to hidden."""
     import cv2
@@ -126,7 +145,11 @@ def components(labels, background=None, min_area=40, hidden_by_others=True, rim=
             continue
         own = L == lab
         if int(lab) in line_mask:
-            own &= line_mask[int(lab)] == 0
+            # strokes are cut away only outside the thick bodies they run into: a string through the middle of
+            # a star must not cut the star in two (the strip still counts as hidden there)
+            disk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * body_r + 1, 2 * body_r + 1))
+            body = cv2.morphologyEx(own.astype(np.uint8), cv2.MORPH_OPEN, disk) > 0
+            own &= (line_mask[int(lab)] == 0) | body
         cc, _ = ndi.label(own)
         for i, sl in enumerate(ndi.find_objects(cc), 1):
             y0, x0 = max(0, sl[0].start - 3), max(0, sl[1].start - 3)

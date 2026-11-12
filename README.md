@@ -14,6 +14,9 @@ What makes it different from generic detectors (OpenCV Hough, scikit-image RANSA
   robust least squares.
 - **Simplest model wins.** `detect_shape` tries all models and keeps the simplest one whose error is close to the
   best (circle > ellipse > polygon > star).
+- **Outline pieces.** Polygons partly covered are rebuilt from their visible straight pieces (a hidden corner is
+  where two sides cross); rings cut open by an object in front are found from both circles' arcs; circles stuck
+  to other shapes (two touching dots, a dot on a bar) are found in the outline pieces of the fused region.
 - **Group regularity.** Same-size dots of one colour get one radius; pieces of one straight line on both sides of a
   shape are joined into one line.
 - **Vectorizer-ready.** Outline chains can be fitted as line / arc / cubic segments (`fit_open`, `fit_closed`);

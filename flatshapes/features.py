@@ -68,17 +68,19 @@ def candidate_kinds(feat, hidden_share=0.0, kinds=("circle", "ellipse", "polygon
             ok = feat["solidity"] < (0.92 if occl else 0.88) and feat["depth"] > 0.25 and 3 <= feat["tips"] <= 10
         elif k == "polygon":
             ok = feat["circularity"] < 0.97 or occl
-        elif k == "ring":
-            ok = False
+        elif k == "ring":  # (with a hole: handled above) cut open by an object in front: a C on two circles
+            ok = occl and sol < 0.8 and feat["arc_share"] > 0.25
         elif k == "segment":  # a cut circle: convex, part of the outline on one circle, part straight
             ok = sol > (0.85 if occl else 0.93) and 0.45 < circ < 0.95 and 0.3 < feat["arc_share"] < 0.93
         elif k == "teardrop":  # one round end (on a circle) and one tip
             ok = sol > (0.8 if occl else 0.88) and 0.5 < circ < 0.95 and 0.3 < feat["arc_share"] < 0.93 \
                 and feat["tips"] <= 2
         elif k == "heart":  # a notch makes it a little concave; two lobes
-            ok = (0.78 if occl else 0.82) < sol < 0.98 and circ > 0.5 and feat["arc_share"] < 0.88
+            ok = (0.78 if occl else 0.82) < sol < 0.98 and circ > 0.5 and feat["arc_share"] < 0.88 \
+                and feat["area"] >= 150 and feat["tips"] <= 4
         elif k == "crescent":  # two horns around a bite
-            ok = sol < (0.85 if occl else 0.8) and circ > 0.15 and feat["tips"] <= 4
+            ok = sol < (0.85 if occl else 0.8) and circ > 0.15 and feat["tips"] <= 4 and feat["arc_share"] > 0.3 \
+                and feat["area"] >= 150
         else:
             ok = True
         if ok:

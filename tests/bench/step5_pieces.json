@@ -1,0 +1,293 @@
+{
+ "scenes": 40,
+ "seed": 1,
+ "wall_sec": 18.76382296299994,
+ "sec_per_image": 0.9064533570999942,
+ "sec_max": 2.500905952000039,
+ "kinds": {
+  "circle": {
+   "tp": 98,
+   "fp": 10,
+   "fn": 7,
+   "precision": 0.9074074074074074,
+   "recall": 0.9333333333333333,
+   "f1": 0.9201877934272301
+  },
+  "ellipse": {
+   "tp": 28,
+   "fp": 3,
+   "fn": 3,
+   "precision": 0.9032258064516129,
+   "recall": 0.9032258064516129,
+   "f1": 0.9032258064516129
+  },
+  "polygon": {
+   "tp": 92,
+   "fp": 12,
+   "fn": 20,
+   "precision": 0.8846153846153846,
+   "recall": 0.8214285714285714,
+   "f1": 0.8518518518518519
+  },
+  "star": {
+   "tp": 19,
+   "fp": 4,
+   "fn": 9,
+   "precision": 0.8260869565217391,
+   "recall": 0.6785714285714286,
+   "f1": 0.7450980392156864
+  },
+  "ring": {
+   "tp": 24,
+   "fp": 0,
+   "fn": 1,
+   "precision": 1.0,
+   "recall": 0.96,
+   "f1": 0.9795918367346939
+  },
+  "segment": {
+   "tp": 17,
+   "fp": 4,
+   "fn": 3,
+   "precision": 0.8095238095238095,
+   "recall": 0.85,
+   "f1": 0.8292682926829269
+  },
+  "teardrop": {
+   "tp": 21,
+   "fp": 2,
+   "fn": 8,
+   "precision": 0.9130434782608695,
+   "recall": 0.7241379310344828,
+   "f1": 0.8076923076923076
+  },
+  "heart": {
+   "tp": 26,
+   "fp": 0,
+   "fn": 1,
+   "precision": 1.0,
+   "recall": 0.9629629629629629,
+   "f1": 0.9811320754716981
+  },
+  "crescent": {
+   "tp": 11,
+   "fp": 0,
+   "fn": 5,
+   "precision": 1.0,
+   "recall": 0.6875,
+   "f1": 0.8148148148148148
+  },
+  "line": {
+   "tp": 25,
+   "fp": 8,
+   "fn": 13,
+   "precision": 0.7575757575757576,
+   "recall": 0.6578947368421053,
+   "f1": 0.704225352112676
+  }
+ },
+ "confusion": {
+  "circle": {
+   "circle": 98,
+   "segment": 1,
+   "ellipse": 1,
+   "teardrop": 1,
+   "none": 4
+  },
+  "ellipse": {
+   "ellipse": 28,
+   "teardrop": 1,
+   "none": 2
+  },
+  "polygon": {
+   "polygon": 92,
+   "none": 16,
+   "circle": 4
+  },
+  "star": {
+   "none": 9,
+   "star": 19
+  },
+  "ring": {
+   "ring": 24,
+   "none": 1
+  },
+  "segment": {
+   "segment": 17,
+   "none": 3
+  },
+  "teardrop": {
+   "teardrop": 21,
+   "circle": 6,
+   "polygon": 2
+  },
+  "heart": {
+   "heart": 26,
+   "polygon": 1
+  },
+  "crescent": {
+   "crescent": 11,
+   "none": 4,
+   "segment": 1
+  },
+  "line": {
+   "none": 13,
+   "line": 25
+  }
+ },
+ "subkinds": {
+  "5-gon": {
+   "found": 6,
+   "total": 6
+  },
+  "5-gon occluded": {
+   "found": 1,
+   "total": 1
+  },
+  "6-gon": {
+   "found": 3,
+   "total": 4
+  },
+  "6-gon occluded": {
+   "found": 1,
+   "total": 1
+  },
+  "7-gon": {
+   "found": 2,
+   "total": 2
+  },
+  "7-gon occluded": {
+   "found": 1,
+   "total": 1
+  },
+  "8-gon": {
+   "found": 5,
+   "total": 7
+  },
+  "8-gon occluded": {
+   "found": 0,
+   "total": 1
+  },
+  "circle": {
+   "found": 25,
+   "total": 27
+  },
+  "circle (in front)": {
+   "found": 60,
+   "total": 63
+  },
+  "circle (in front) +string": {
+   "found": 1,
+   "total": 2
+  },
+  "circle occluded": {
+   "found": 3,
+   "total": 3
+  },
+  "circle stuck": {
+   "found": 9,
+   "total": 10
+  },
+  "crescent": {
+   "found": 8,
+   "total": 12
+  },
+  "crescent occluded": {
+   "found": 3,
+   "total": 4
+  },
+  "cut circle": {
+   "found": 7,
+   "total": 7
+  },
+  "ellipse": {
+   "found": 23,
+   "total": 26
+  },
+  "ellipse occluded": {
+   "found": 5,
+   "total": 5
+  },
+  "half circle": {
+   "found": 10,
+   "total": 12
+  },
+  "half circle occluded": {
+   "found": 0,
+   "total": 1
+  },
+  "heart": {
+   "found": 16,
+   "total": 16
+  },
+  "heart occluded": {
+   "found": 10,
+   "total": 11
+  },
+  "line": {
+   "found": 25,
+   "total": 38
+  },
+  "rect": {
+   "found": 19,
+   "total": 20
+  },
+  "rect occluded": {
+   "found": 1,
+   "total": 2
+  },
+  "ring": {
+   "found": 21,
+   "total": 21
+  },
+  "ring occluded": {
+   "found": 3,
+   "total": 4
+  },
+  "roundrect": {
+   "found": 19,
+   "total": 20
+  },
+  "roundrect occluded": {
+   "found": 2,
+   "total": 5
+  },
+  "sparkle": {
+   "found": 18,
+   "total": 18
+  },
+  "sparkle +string": {
+   "found": 0,
+   "total": 6
+  },
+  "sparkle occluded": {
+   "found": 1,
+   "total": 4
+  },
+  "star5": {
+   "found": 10,
+   "total": 12
+  },
+  "star5 occluded": {
+   "found": 2,
+   "total": 9
+  },
+  "teardrop": {
+   "found": 17,
+   "total": 21
+  },
+  "teardrop occluded": {
+   "found": 4,
+   "total": 8
+  },
+  "triangle": {
+   "found": 16,
+   "total": 16
+  },
+  "triangle occluded": {
+   "found": 4,
+   "total": 5
+  }
+ },
+ "version": "0.1.0"
+}

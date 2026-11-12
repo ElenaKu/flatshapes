@@ -168,3 +168,48 @@ def equalize_radii(circles, colours=None, size_rel=0.12, size_tol=1.0, group_de=
                 circles[k].path = circle_path(p["cx"], p["cy"], med)
             done.update(grp)
     return groups
+
+
+def circles_in_region(mask, hidden=None, max_circles=6, tol=1.0, min_cover_deg=200.0, min_r=4.0, min_fill=0.92,
+                      rng=None):
+    """Circles hidden inside a region that is not one simple shape - dots stuck to each other or to a ribbon, a
+    balloon fused with its string: repeated RANSAC on the outline pieces. A circle counts when its outline points
+    cover at least min_cover_deg degrees (the rest may be merged into the neighbour) and its disc lies inside the
+    region (>= min_fill). Returns a list of ShapeFit(kind="circle", params incl. from_pieces=True)."""
+    import cv2
+    K = np.asarray(mask, bool)
+    P, vis = outline_points(K, hidden, every=4)
+    P = P[vis]
+    sub = max(1, len(P) // 1500)  # long outlines (frames, text): enough points to see arcs, not all
+    spacing = float(np.median(np.linalg.norm(np.diff(P, axis=0), axis=1))) * sub if len(P) > 2 else 1.0
+    P = P[::sub]
+    rng = np.random.default_rng(0) if rng is None else rng
+    out = []
+    h, w = K.shape
+    tries = 0
+    while len(P) >= 20 and len(out) < max_circles and tries < max_circles + 4:
+        tries += 1
+        rc = ransac_circle(P, tol, iters=200, min_inliers=12, rng=rng)
+        if rc is None:
+            break
+        (cx, cy, r), inl = rc
+        if r < min_r or r > 0.75 * max(h, w):
+            break
+        cover = coverage_deg(P, (cx, cy), inl)
+        # points spaced about 1 px: a real circle's arc has about r * angle points
+        # outline points are about `spacing` px apart: a real circle's arc has about r * angle / spacing of them
+        dense = inl.sum() * spacing >= 0.6 * r * np.radians(cover)
+        if cover < min_cover_deg or not dense:
+            break
+        D = np.zeros((h, w), np.uint8)
+        cv2.circle(D, (int(round(cx * 4)), int(round(cy * 4))), int(round(r * 4)), 1, -1, shift=2)
+        D = D > 0
+        if not D.any() or (D & K).sum() / D.sum() < min_fill:
+            P = P[~inl]
+            continue
+        dd = np.abs(np.hypot(P[inl, 0] - cx, P[inl, 1] - cy) - r)
+        out.append(ShapeFit("circle", dict(cx=float(cx), cy=float(cy), r=float(r), from_pieces=True),
+                            circle_path(cx, cy, r), dict(mean=float(dd.mean()), p80=float(np.percentile(dd, 80)),
+                                                         max=float(dd.max()), visible=float(cover / 360.0)), D))
+        P = P[~inl]
+    return out

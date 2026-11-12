@@ -155,21 +155,39 @@ def fit_ring(mask, hidden=None, max_mean=0.5, max_p80=1.0, rel_mean=0.022, rel_p
     from .circle import kasa, circle_path
     m8 = np.asarray(mask, np.uint8)
     cs, hier = cv2.findContours(m8, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
-    if hier is None or len(cs) < 2:
+    if hier is None or not len(cs):
         return None
     hier = hier[0]
     outer = max((i for i in range(len(cs)) if hier[i][3] < 0), key=lambda i: cv2.contourArea(cs[i]))
     holes = [i for i in range(len(cs)) if hier[i][3] == outer]
-    if not holes:
-        return None
-    hole = max(holes, key=lambda i: cv2.contourArea(cs[i]))
-    A_out = cv2.contourArea(cs[outer])
-    if cv2.contourArea(cs[hole]) < min_hole * A_out:
-        return None
+    hole = max(holes, key=lambda i: cv2.contourArea(cs[i])) if holes else None
+    if hole is None or cv2.contourArea(cs[hole]) < min_hole * cv2.contourArea(cs[outer]):
+        if hidden is None or not np.asarray(hidden, bool).any():
+            return None
+        # an object in front cuts the ring open (a C shape, no hole left): the one outline holds visible pieces
+        # of both circles - split it into the circle found first and the rest
+        return _open_ring(cs[outer].reshape(-1, 2).astype(float) + 0.5, m8, hidden, max_mean, max_p80, rel_mean,
+                          rel_p80, max_offset)
     # pixel-centre contours: outer edge lies half a pixel out, hole edge half a pixel in
     Po = cs[outer].reshape(-1, 2).astype(float) + 0.5
     Ph = cs[hole].reshape(-1, 2).astype(float) + 0.5
-    fo, fh = kasa(Po), kasa(Ph)
+    # circles from the visible parts only (RANSAC: an object in front cuts a bite out of the outer edge)
+    from .circle import ransac_circle
+    hid = np.asarray(hidden, bool) if hidden is not None else np.zeros(m8.shape, bool)
+    hid = cv2.dilate(hid.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+
+    def vis_pts(Q):
+        q = np.clip(Q.astype(int), 0, [m8.shape[1] - 1, m8.shape[0] - 1])
+        return Q[~hid[q[:, 1], q[:, 0]]]
+
+    def circ(Q):
+        Qv = vis_pts(Q)
+        if len(Qv) < 8:
+            return None
+        rc = ransac_circle(Qv[:: max(1, len(Qv) // 300)], tol=1.0, iters=60)
+        return rc[0] if rc is not None and rc[1].mean() > 0.6 else None
+
+    fo, fh = circ(Po), circ(Ph)
     if fo is None or fh is None:
         return None
     ro, rh = fo[2] + 0.5, fh[2] - 0.5
@@ -178,17 +196,12 @@ def fit_ring(mask, hidden=None, max_mean=0.5, max_p80=1.0, rel_mean=0.022, rel_p
     if np.hypot(fo[0] - fh[0], fo[1] - fh[1]) > max_offset * ro:
         return None
     cx, cy = (fo[0] * len(Po) + fh[0] * len(Ph)) / (len(Po) + len(Ph)), (fo[1] * len(Po) + fh[1] * len(Ph)) / (len(Po) + len(Ph))
-    do = np.abs(np.hypot(Po[:, 0] - cx, Po[:, 1] - cy) - (ro - 0.5))
-    dh = np.abs(np.hypot(Ph[:, 0] - cx, Ph[:, 1] - cy) - (rh + 0.5))
+    Pov, Phv = vis_pts(Po), vis_pts(Ph)
+    if len(Pov) + len(Phv) < 0.4 * (len(Po) + len(Ph)):
+        return None
+    do = np.abs(np.hypot(Pov[:, 0] - cx, Pov[:, 1] - cy) - (ro - 0.5))
+    dh = np.abs(np.hypot(Phv[:, 0] - cx, Phv[:, 1] - cy) - (rh + 0.5))
     d = np.r_[do, dh]
-    if hidden is not None:
-        hid = np.asarray(hidden, bool)
-        pts = np.vstack([Po, Ph]).astype(int)
-        pts = np.clip(pts, 0, [m8.shape[1] - 1, m8.shape[0] - 1])
-        keep = ~hid[pts[:, 1], pts[:, 0]]
-        if keep.mean() < 0.4:
-            return None
-        d = d[keep]
     mean, p80 = float(d.mean()), float(np.percentile(d, 80))
     if mean > limit(max_mean, rel_mean, ro) or p80 > limit(max_p80, rel_p80, ro):
         return None
@@ -198,6 +211,47 @@ def fit_ring(mask, hidden=None, max_mean=0.5, max_p80=1.0, rel_mean=0.022, rel_p
     path = circle_path(cx, cy, ro) + circle_path(cx, cy, rh)  # draw with fill-rule="evenodd"
     return ShapeFit("ring", dict(cx=float(cx), cy=float(cy), r_out=float(ro), r_in=float(rh)), path,
                     dict(mean=mean, p80=p80, max=float(d.max()), visible=1.0), M > 0)
+
+
+def _open_ring(P, m8, hidden, max_mean, max_p80, rel_mean, rel_p80, max_offset):
+    import cv2
+    from .circle import ransac_circle, circle_path
+    hid = cv2.dilate(np.asarray(hidden, np.uint8), np.ones((5, 5), np.uint8)) > 0
+    q = np.clip(P.astype(int), 0, [m8.shape[1] - 1, m8.shape[0] - 1])
+    Pv = P[~hid[q[:, 1], q[:, 0]]]
+    if len(Pv) < 30:
+        return None
+    Pv = Pv[:: max(1, len(Pv) // 400)]
+    r1 = ransac_circle(Pv, tol=1.0, iters=80)
+    if r1 is None:
+        return None
+    rest = Pv[~r1[1]]
+    if len(rest) < 10:
+        return None
+    r2 = ransac_circle(rest, tol=1.0, iters=80)
+    if r2 is None:
+        return None
+    (ax, ay, ar), (bx, by, br) = r1[0], r2[0]
+    ro, rh = max(ar, br), min(ar, br)
+    if rh < 0.2 * ro or np.hypot(ax - bx, ay - by) > max_offset * ro:
+        return None
+    w1, w2 = r1[1].sum(), r2[1].sum()
+    cx, cy = (ax * w1 + bx * w2) / (w1 + w2), (ay * w1 + by * w2) / (w1 + w2)
+    d = np.minimum(np.abs(np.hypot(Pv[:, 0] - cx, Pv[:, 1] - cy) - ro), np.abs(np.hypot(Pv[:, 0] - cx, Pv[:, 1] - cy) - rh))
+    mean, p80 = float(d.mean()), float(np.percentile(d, 80))
+    if mean > limit(max_mean, rel_mean, ro) or p80 > limit(max_p80, rel_p80, ro):
+        return None
+    M = np.zeros(m8.shape, np.uint8)
+    cv2.circle(M, (int(round(cx * 4)), int(round(cy * 4))), int(round(ro * 4)), 1, -1, shift=2)
+    cv2.circle(M, (int(round(cx * 4)), int(round(cy * 4))), int(round(rh * 4)), 0, -1, shift=2)
+    # the ring must explain the visible shape (a C of the right thickness)
+    care = ~hid
+    u = np.count_nonzero(((m8 > 0) | (M > 0)) & care)
+    if not u or np.count_nonzero((m8 > 0) & (M > 0) & care) / u < 0.85:
+        return None
+    return ShapeFit("ring", dict(cx=float(cx), cy=float(cy), r_out=float(ro), r_in=float(rh)),
+                    circle_path(cx, cy, ro) + circle_path(cx, cy, rh),
+                    dict(mean=mean, p80=p80, max=float(d.max()), visible=float(len(Pv) / max(1, len(P)))), M > 0)
 
 
 # ------------------------------------------------------------------ circular segment (half circle etc.)

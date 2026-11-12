@@ -4,7 +4,7 @@ Lines, circular arcs, circles, ellipses, polygons and stars, fitted to shape mas
 objects in front left out of the fit. Results carry exact SVG path data.
 """
 from .result import ShapeFit, outline_points
-from .circle import fit_circle, ransac_circle, kasa, circle_segments, equalize_radii, circle_path
+from .circle import fit_circle, ransac_circle, kasa, circle_segments, equalize_radii, circle_path, circles_in_region
 from .ellipse import fit_ellipse, ellipse_path
 from .polygon import fit_polygon
 from .star import fit_star
