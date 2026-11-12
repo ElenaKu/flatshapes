@@ -133,6 +133,17 @@ Re-fits only the regions you marked in the test bench and searches the detector 
 satisfy the most marks (correct kept, wrong removed, missed found). Writes `VERDICT_DIR/tuned_settings.json`;
 load it in the web UI with **Load tuned settings** (Settings tab).
 
+## Benchmark
+
+```
+python tools/bench.py --save tests/bench/new.json --compare tests/bench/baseline.json
+```
+
+40 synthetic scenes with known shapes (fixed seed): wobbly edges, shapes partly covered, shapes on an underlay,
+strings through sparkles, free lines. Prints precision / recall / F1 per kind, what each true kind was detected
+as, recall per shape type and the time per image, with the change against an earlier run. `--real IMAGE_DIR`
+also scores your web-UI verdicts; `--export DIR` writes the scenes as PNG + truth JSON to look at them in the UI.
+
 ## Tests
 
 ```
