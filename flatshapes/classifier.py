@@ -81,10 +81,10 @@ def classify(regions, path=None, batch=256):
     return np.vstack(out), _SESSION["classes"]
 
 
-def kinds_from_probs(p, classes, confident=0.8, cover=0.97, max_kinds=2, skip_none=0.95):
+def kinds_from_probs(p, classes, confident=0.6, cover=0.97, max_kinds=2, skip_none=0.85):
     """Detectors to run for one region from its class probabilities:
     - sure it is no simple shape (none >= skip_none): () - no fit at all
-    - confident (top >= confident): the best classes until they cover `cover` of the probability (at most
+    - confident (top >= confident; training uses label smoothing, so probabilities stay below ~0.95): the best classes until they cover `cover` of the probability (at most
       max_kinds), 'none' left out
     - otherwise None: let the feature rules decide."""
     order = np.argsort(-p)
