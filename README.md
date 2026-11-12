@@ -155,6 +155,8 @@ Rebuilds every object of a flat illustration from a few simple shapes (circle, e
 rectangle, triangle, capsule; thin straight strokes stay lines) in the image's own colours: a stylised,
 geometric-minimal version as SVG + PNG preview. `--shapes 1` is very abstract, 5-6 stays close to the original.
 In code: `prims, svg = fs.geometrize(labels, palette, background, max_shapes=3)`.
+In the web UI: **Geometrize** tab - original and result side by side, shapes-per-object slider, shape-set tabs
+and presets (dots, blocks, angular, soft), save the SVG to `flatshapes_geometrized` next to the image folder.
 
 ## Region classifier (optional, for speed)
 

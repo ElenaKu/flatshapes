@@ -328,6 +328,35 @@ def run_inspect(req):
                 min_area=int(s.get("min_area", 60)))
 
 
+def run_geometrize(req):
+    """Geometric abstraction of the image: SVG text and counts."""
+    import time as _time
+    from flatshapes import abstract as A
+    s = req.get("settings", {})
+    labels, cols, bg = get_labels(req["path"], int(s.get("colors", 8)), float(s.get("merge_de", 10)))
+    pal = [_lab_to_hex(c) for c in cols]
+    kinds = tuple(k for k in req.get("kinds", A.KINDS) if k in A.KINDS) or A.KINDS
+    t0 = _time.perf_counter()
+    prims, svg = A.geometrize(labels, pal, bg, max_shapes=int(req.get("shapes", 3)), kinds=kinds,
+                              lines=bool(req.get("lines", True)), min_area=int(req.get("min_area", 40)), workers=None)
+    counts = {}
+    for q in prims:
+        counts[q.kind] = counts.get(q.kind, 0) + 1
+    return dict(svg=svg, shapes=len(prims), counts=counts, seconds=round(_time.perf_counter() - t0, 2))
+
+
+def save_geometrized(req):
+    """Write the SVG next to the image folder: <images>/../flatshapes_geometrized/<same subfolders>/<name>.svg."""
+    rel = req["path"]
+    _safe_path(rel)
+    out = os.path.join(os.path.dirname(STATE["root"]) or STATE["root"], "flatshapes_geometrized",
+                       os.path.splitext(rel)[0] + (req.get("suffix") or "") + ".svg")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w", encoding="utf-8") as fh:
+        fh.write(req["svg"])
+    return dict(saved=out)
+
+
 def _verdict_file(rel):
     return os.path.join(STATE["verdicts"], os.path.splitext(rel)[0] + ".json")
 
@@ -424,7 +453,8 @@ class Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get("Content-Length", 0))
             req = json.loads(self.rfile.read(n) or b"{}")
             route = {"/api/detect": run_detect, "/api/inspect": run_inspect, "/api/verdicts": save_verdicts,
-                     "/api/open": lambda r: open_folder(r["path"])}
+                     "/api/open": lambda r: open_folder(r["path"]), "/api/geometrize": run_geometrize,
+                     "/api/geometrize/save": save_geometrized}
             fn = route.get(urlparse(self.path).path)
             if fn is None:
                 self._send(404, dict(error="not found"))

@@ -50,6 +50,10 @@
   .btn.ok { border-color:var(--ok); color:var(--ok); } .btn.bad { border-color:var(--bad); color:var(--bad); }
   .muted { color:var(--dim); }
   kbd { background:#2a2b30; border:1px solid var(--line); border-radius:3px; padding:0 4px; font-size:11px; }
+  .pane { flex:1; display:flex; flex-direction:column; min-width:0; }
+  .pane .cap { padding:2px 4px; }
+  .pane img, #geoOut svg { flex:1; width:100%; min-height:0; object-fit:contain; display:block; }
+  #geoOut { flex:1; display:flex; min-height:0; }
   #fb { position:fixed; inset:0; background:#000a; display:none; align-items:center; justify-content:center; z-index:10; }
   #fb.on { display:flex; }
   #fbBox { width:min(760px, 92vw); height:min(640px, 88vh); background:var(--panel); border:1px solid var(--line);
@@ -70,6 +74,8 @@
 <body>
 <header>
   <b>flatshapes</b>
+  <div class="tabs" id="appTabs"></div>
+  <span id="shapeHeader" style="display:contents">
   <div class="tabs" id="modeTabs"></div>
   <div class="tabs" id="missedTabs" style="display:none"></div>
   <span class="muted">Model:</span>
@@ -77,6 +83,7 @@
   <span class="muted">Show:</span>
   <div class="tabs" id="kindTabs"></div>
   <span class="muted" id="counts"></span>
+  </span>
   <span style="flex:1"></span>
   <span class="muted"><kbd>C</kbd> correct <kbd>X</kbd> wrong <kbd>Del</kbd> clear <kbd>←</kbd><kbd>→</kbd> image <kbd>F</kbd> fit</span>
 </header>
@@ -93,12 +100,20 @@
   <div class="bottom"><span id="fbInfo" class="muted" style="flex:1"></span>
     <button class="btn main" id="fbOpen">Open this folder</button></div>
 </div></div>
+<div id="geoView" style="display:none;overflow:hidden;background:#0c0c0e;position:relative">
+  <div style="display:flex;height:100%;gap:6px;padding:6px">
+    <div class="pane"><div class="muted cap">original</div><img id="geoOrig"></div>
+    <div class="pane"><div class="muted cap" id="geoCap">shapes</div><div id="geoOut"></div></div>
+  </div>
+  <div id="geoBusy" class="muted" style="position:absolute;left:10px;bottom:8px"></div>
+</div>
 <div id="view"><svg id="svg"></svg><div id="busy"><div class="spin"></div><div id="busyText">processing…</div></div><div id="toast"></div><div id="status">loading…</div></div>
 <div id="right">
   <section><div class="tabs" id="panelTabs"></div></section>
   <div id="panelSettings"></div>
   <div id="panelInspector" style="display:none"></div>
   <div id="panelVerdicts" style="display:none"></div>
+  <div id="panelGeo" style="display:none"></div>
 </div>
 <script>
 const KINDS = ["circle", "ellipse", "polygon", "star", "ring", "segment", "teardrop", "heart", "crescent", "line", "motif", "model"];
@@ -140,6 +155,79 @@ const S = { images: [], cur: -1, data: null, sel: null, verd: { marks: [], misse
             group: "general", vb: null, inspect: null,
             values: {}, enabled: Object.fromEntries(KINDS.map(k => [k, true])), useModel: true };
 S.show.model = false;
+S.app = "shapes";
+S.geo = { shapes: 3, kinds: ["circle", "ellipse", "rect", "roundrect", "triangle", "capsule"], lines: true, min_area: 40, svg: null };
+try { Object.assign(S.geo, JSON.parse(localStorage.getItem("fs_geo") || "{}"), { svg: null }); } catch (e) {}
+const GEO_KINDS = ["circle", "ellipse", "rect", "roundrect", "triangle", "capsule"];
+function drawApp() {
+  tabs($("appTabs"), [["shapes", "Find shapes"], ["geo", "Geometrize"]], k => S.app === k, k => { S.app = k; drawApp(); });
+  const geo = S.app === "geo";
+  $("shapeHeader").style.display = geo ? "none" : "contents";
+  $("view").style.display = geo ? "none" : "";
+  $("geoView").style.display = geo ? "" : "none";
+  $("panelTabs").parentElement.style.display = geo ? "none" : "";
+  for (const id of ["panelSettings", "panelInspector", "panelVerdicts"]) if (geo) $(id).style.display = "none";
+  $("panelGeo").style.display = geo ? "" : "none";
+  if (geo) { drawGeoPanel(); geometrize(); } else { drawPanels(); if (S.cur >= 0 && !S.data) openImage(S.cur); }
+}
+function drawGeoPanel() {
+  const el = $("panelGeo"); el.innerHTML = "";
+  const sec = document.createElement("section"); el.appendChild(sec);
+  sec.innerHTML = `<h3>Geometrize</h3><div class="muted">Every object rebuilt from a few simple shapes in the image's own colours.</div>`;
+  const row = document.createElement("div"); row.className = "row";
+  row.innerHTML = `<label>shapes per object</label><input type="range" min="1" max="8" step="1" value="${S.geo.shapes}"><span>${S.geo.shapes}</span>`;
+  const inp = row.querySelector("input"); inp.oninput = () => { row.querySelector("span").textContent = inp.value; S.geo.shapes = +inp.value; geoChanged(); };
+  sec.appendChild(row);
+  const row2 = document.createElement("div"); row2.className = "row";
+  row2.innerHTML = `<label>skip objects under px</label><input type="range" min="0" max="400" step="10" value="${S.geo.min_area}"><span>${S.geo.min_area}</span>`;
+  const inp2 = row2.querySelector("input"); inp2.oninput = () => { row2.querySelector("span").textContent = inp2.value; S.geo.min_area = +inp2.value; geoChanged(); };
+  sec.appendChild(row2);
+  const h = document.createElement("h3"); h.style.marginTop = "10px"; h.textContent = "shapes to use"; sec.appendChild(h);
+  const kt = document.createElement("div"); kt.className = "tabs"; sec.appendChild(kt);
+  tabs(kt, GEO_KINDS.map(k => [k, k]), k => S.geo.kinds.includes(k), k => {
+    S.geo.kinds = S.geo.kinds.includes(k) ? S.geo.kinds.filter(x => x !== k) : [...S.geo.kinds, k];
+    if (!S.geo.kinds.length) S.geo.kinds = [k];
+    drawGeoPanel(); geoChanged(); });
+  const pr = document.createElement("div"); pr.className = "tabs"; pr.style.marginTop = "6px"; sec.appendChild(pr);
+  const presets = { all: GEO_KINDS, dots: ["circle"], blocks: ["rect"], angular: ["rect", "triangle"], soft: ["circle", "ellipse", "capsule", "roundrect"] };
+  tabs(pr, Object.keys(presets).map(k => [k, "preset: " + k]), k => JSON.stringify([...presets[k]].sort()) === JSON.stringify([...S.geo.kinds].sort()),
+       k => { S.geo.kinds = [...presets[k]]; drawGeoPanel(); geoChanged(); });
+  const h2 = document.createElement("h3"); h2.style.marginTop = "10px"; h2.textContent = "thin straight strokes"; sec.appendChild(h2);
+  const lt = document.createElement("div"); lt.className = "tabs"; sec.appendChild(lt);
+  tabs(lt, [["on", "keep as lines"], ["off", "drop"]], k => (k === "on") === S.geo.lines, k => { S.geo.lines = k === "on"; drawGeoPanel(); geoChanged(); });
+  const sec2 = document.createElement("section"); el.appendChild(sec2);
+  sec2.innerHTML = `<div id="geoInfo" class="muted"></div><div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+    <button class="btn main" id="geoSave">Save SVG to folder</button><button class="btn" id="geoDl">Download SVG</button></div>
+    <div class="muted" style="margin-top:6px">Saved next to the image folder in <b>flatshapes_geometrized</b> (same subfolders). Colours: General tab of Find shapes.</div>`;
+  $("geoSave").onclick = async () => { if (!S.geo.svg) return;
+    try { const r = await api("/api/geometrize/save", { path: S.images[S.cur], svg: S.geo.svg, suffix: `_geo${S.geo.shapes}` }); toast("saved " + r.saved); }
+    catch (e) { toast("save failed: " + e.message); } };
+  $("geoDl").onclick = () => { if (!S.geo.svg) return;
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([S.geo.svg], { type: "image/svg+xml" }));
+    a.download = (S.images[S.cur] || "image").split(/[\\/]/).pop().replace(/\.[^.]+$/, "") + `_geo${S.geo.shapes}.svg`; a.click(); };
+  geoInfo();
+}
+function geoInfo() { const i = $("geoInfo"); if (!i || !S.geo.res) return;
+  i.textContent = `${S.geo.res.shapes} shapes · ` + Object.entries(S.geo.res.counts).map(([k, v]) => `${k} ${v}`).join(", ") + ` · ${S.geo.res.seconds} s`; }
+let tGeo = null, geoSeq = 0;
+function geoChanged() { try { localStorage.setItem("fs_geo", JSON.stringify({ ...S.geo, svg: null, res: null })); } catch (e) {}
+  clearTimeout(tGeo); tGeo = setTimeout(geometrize, 300); }
+async function geometrize() {
+  if (S.cur < 0 || S.app !== "geo") return;
+  const path = S.images[S.cur], seq = ++geoSeq;
+  $("geoOrig").src = "/api/image?path=" + encodeURIComponent(path);
+  $("geoBusy").textContent = "geometrizing…"; busy(true, "rebuilding objects from shapes…");
+  try {
+    const r = await api("/api/geometrize", { path, settings: S.values.general, shapes: S.geo.shapes, kinds: S.geo.kinds,
+                                               lines: S.geo.lines, min_area: S.geo.min_area });
+    if (seq !== geoSeq) return;
+    S.geo.svg = r.svg; S.geo.res = r;
+    $("geoOut").innerHTML = r.svg;
+    const sv = $("geoOut").querySelector("svg"); if (sv) { sv.removeAttribute("width"); sv.removeAttribute("height"); sv.setAttribute("preserveAspectRatio", "xMidYMid meet"); }
+    $("geoCap").textContent = `shapes (${r.shapes})`; $("geoBusy").textContent = ""; geoInfo();
+  } catch (e) { $("geoBusy").textContent = "failed: " + e.message; toast("geometrize failed: " + e.message); }
+  finally { busy(false); }
+}
 for (const [g, rows] of Object.entries(SETTINGS)) { S.values[g] = {}; for (const r of rows) S.values[g][r[0]] = r[5]; }
 try { const saved = JSON.parse(localStorage.getItem("fs_settings") || "null");
       if (saved) { for (const g in saved.values) Object.assign(S.values[g] || {}, saved.values[g]); Object.assign(S.enabled, saved.enabled || {}); } } catch (e) {}
@@ -480,6 +568,7 @@ async function drawVerdicts() {
 // ---------- image loading ----------
 async function openImage(i) {
   if (i < 0 || i >= S.images.length) return;
+  if (S.app === "geo") { S.cur = i; S.data = null; drawFiles(); geometrize(); return; }
   S.cur = i; S.sel = null; S.inspect = null; drawFiles();
   const path = S.images[i];
   svg.innerHTML = ""; status("loading " + path);
@@ -525,7 +614,7 @@ window.addEventListener("keydown", ev => {
 window.addEventListener("resize", () => S.vb && fit());
 
 (async () => {
-  drawHeader(); drawPanels();
+  drawHeader(); drawPanels(); drawApp();
   try { const r = await api("/api/list"); applyList(r); if (!r.root) fbShow(true); }
   catch (e) { status("server error: " + e.message); }
 })();

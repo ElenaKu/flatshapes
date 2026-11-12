@@ -247,10 +247,12 @@ def geometrize(labels, palette, background=None, max_shapes=3, kinds=KINDS, min_
                 regions.append((int(lab), sl[1].start, sl[0].start, m))
     regions.sort(key=lambda r: -int(r[3].sum()))
     args = [(r[3], max_shapes, kinds, cover, w_out) for r in regions]
+    pool = None
     if workers != 1 and len(args) > 4:
-        from concurrent.futures import ProcessPoolExecutor
-        with ProcessPoolExecutor(max_workers=workers or None) as ex:
-            fits = list(ex.map(_simplify_task, args, chunksize=4))
+        from .detect import get_pool  # the shared pool: no process start-up on every call
+        pool = get_pool(workers or None)
+    if pool is not None:
+        fits = list(pool.map(_simplify_task, args, chunksize=4))
     else:
         fits = [_simplify_task(a) for a in args]
     prims = []
