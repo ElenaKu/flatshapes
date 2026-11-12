@@ -12,6 +12,6 @@
   "crescent"
  ],
  "size": 64,
- "val_accuracy": 0.991340782122905,
+ "val_accuracy": 0.9919272727272728,
  "scenes": 20000
 }
