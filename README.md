@@ -142,6 +142,14 @@ Re-fits only the regions you marked in the test bench and searches the detector 
 satisfy the most marks (correct kept, wrong removed, missed found). Writes `VERDICT_DIR/tuned_settings.json`;
 load it in the web UI with **Load tuned settings** (Settings tab).
 
+## Region classifier (optional, for speed)
+
+A tiny CNN (~0.2 M parameters, < 1 MB, ONNX) looks at each region's mask and says which shape it is, so only that
+model is fitted. Train it on synthetic scenes in Colab with `notebooks/train_region_classifier.ipynb` (everything
+is saved to Google Drive as it goes), copy `region_classifier.onnx` + `.json` into `flatshapes/models/` and
+`pip install onnxruntime`. `detect_shapes(classifier=False)` turns it off; without the files nothing changes.
+Training data alone: `python tools/region_dataset.py OUT_DIR --scenes 20000`.
+
 ## Benchmark
 
 ```

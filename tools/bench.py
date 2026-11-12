@@ -249,9 +249,12 @@ def make_scene(rng, n_shapes=(6, 11)):
 
 
 # ------------------------------------------------------------------ detection and matching
+CLASSIFIER = True
+
+
 def detect(labels, background=0):
     lines = fs.find_lines(labels, background=background)
-    shapes = fs.detect_shapes(labels, background=background, lines=lines)
+    shapes = fs.detect_shapes(labels, background=background, lines=lines, classifier=CLASSIFIER)
     out = []
     for lab, _, f in shapes:
         p = f.params
@@ -399,6 +402,9 @@ def real_score(image_dir, verdict_dir):
 
 # ------------------------------------------------------------------ report
 def _timed_detect(L):
+    global CLASSIFIER
+    if os.environ.get("FLATSHAPES_NO_CLASSIFIER"):
+        CLASSIFIER = False
     t0 = time.perf_counter()
     d = detect(L)
     return d, time.perf_counter() - t0
@@ -417,10 +423,14 @@ def main():
     ap.add_argument("--export")
     ap.add_argument("--real")
     ap.add_argument("--verdicts")
+    ap.add_argument("--no-classifier", action="store_true", help="feature rules only (no region classifier)")
     ap.add_argument("--workers", type=int, default=1,
                     help="processes, one scene each (0 = all cores); the time per image stays single-core")
     a = ap.parse_args()
 
+    global CLASSIFIER
+    CLASSIFIER = not a.no_classifier
+    os.environ["FLATSHAPES_NO_CLASSIFIER"] = "1" if a.no_classifier else ""  # worker processes
     rng = np.random.default_rng(a.seed)
     scenes = [make_scene(rng) for _ in range(a.scenes)]
     if a.export:

@@ -13,6 +13,10 @@ dependencies = ["numpy", "scipy", "opencv-python", "scikit-image"]
 
 [project.optional-dependencies]
 test = ["pytest"]
+fast = ["onnxruntime"]
 
 [tool.setuptools]
 packages = ["flatshapes"]
+
+[tool.setuptools.package-data]
+flatshapes = ["models/*.onnx", "models/*.json"]

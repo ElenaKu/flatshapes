@@ -49,7 +49,8 @@ def detect_shape(mask, hidden=None, kinds=ORDER, slack=0.15, options=None, prefi
 
 
 def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, equal_radius=True, colours=None, rim=4,
-                  underlay_share=0.5, lines=None, line_pad=3.0, workers=1, pieces=True, **kw):
+                  underlay_share=0.5, lines=None, line_pad=3.0, workers=1, pieces=True, classifier=True,
+                  classifier_kw=None, **kw):
     """Run detect_shape on every connected component of every label of a label map (H, W).
     hidden_by_others: outline that touches another non-background label counts as hidden (the neighbour may be in
     front); parts of another label thinner than `rim` px (anti-aliasing fringes) do not count, nor does a label
@@ -58,19 +59,36 @@ def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, e
     count as objects in front, so a star with strings glued to it is fitted as a star. colours:
     optional {label: CIELAB} for grouping same-size dots. Returns a list of
     (label, component index, ShapeFit).
+    classifier: True = use models/region_classifier.onnx when it and onnxruntime are there (a path = that
+    model, False = never): the CNN picks the detectors per region; classifier_kw go to kinds_from_probs.
     pieces: regions that fit no shape are searched for circles in their outline pieces (circles_in_region).
     workers: processes for the per-region fits (1 = none, None or 0 = all cores); the pool is started once and
     reused. On Windows the calling script needs the usual `if __name__ == "__main__":` guard."""
     out = []
     comps = list(components(labels, background, min_area, hidden_by_others, rim, underlay_share, lines, line_pad))
+    # per-region detector choice from the classifier (one batch for the whole image); without a model every
+    # region uses the feature rules as before
+    kws = [kw] * len(comps)
+    if classifier and comps:
+        from .classifier import classify, kinds_from_probs
+        probs, classes = classify([(c[2], c[3]) for c in comps], None if classifier is True else classifier)
+        if probs is not None:
+            allowed = set(kw.get("kinds", ORDER))
+            kws = []
+            for p in probs:
+                ks = kinds_from_probs(p, classes, **(classifier_kw or {}))
+                if ks is None:
+                    kws.append(kw)
+                else:
+                    kws.append({**kw, "kinds": tuple(k for k in ks if k in allowed), "prefilter": False})
     pool = get_pool(workers) if workers != 1 and len(comps) >= 6 else None
     if pool is not None:
         # biggest regions first so no worker is left with one large star fit at the end
         order = sorted(range(len(comps)), key=lambda j: -int(comps[j][2].sum()))
-        futs = {j: pool.submit(_detect_task, comps[j][2], comps[j][3], kw) for j in order}
+        futs = {j: pool.submit(_detect_task, comps[j][2], comps[j][3], kws[j]) for j in order}
         fits = {j: futs[j].result() for j in order}
     else:
-        fits = {j: detect_shape(c[2], c[3], **kw) for j, c in enumerate(comps)}
+        fits = {j: detect_shape(c[2], c[3], **kws[j]) for j, c in enumerate(comps)}
     for j, (lab, i, m, hid, x0, y0) in enumerate(comps):
         f = fits[j]
         # a region that fits no simple shape - or only a many-cornered / rounded polygon, which can wrap two
