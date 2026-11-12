@@ -148,10 +148,14 @@ def _fill(canvas, P, label):
     cv2.fillPoly(canvas, [np.round(P * SS).astype(np.int32)], int(label))
 
 
-def make_scene(rng, n_shapes=(6, 11)):
-    """Label map (SIZE x SIZE, 0 = background) and the true shapes."""
+def make_scene(rng, n_shapes=(6, 11), distractors=False):
+    """Label map (SIZE x SIZE, 0 = background) and the true shapes. distractors=True (training data only, the
+    benchmark keeps its fixed scenes) adds things that are not simple shapes - text, bows, wavy ribbons, blobs,
+    balloons on curly strings, curly scraps - and pits / bites on some true shapes, like on generated art."""
     big = np.zeros((SIZE * SS, SIZE * SS), np.uint8)
     truth, placed = [], []
+    if distractors:  # leave room for them
+        n_shapes = (3, 8)
     # sometimes a big underlay (a bag, a card) that shapes lie on
     if rng.random() < 0.5:
         x0, y0 = rng.uniform(20, 200, 2)
@@ -244,8 +248,114 @@ def make_scene(rng, n_shapes=(6, 11)):
         truth.append(dict(kind="line", sub="line", x0=float(p0[0]), y0=float(p0[1]), x1=float(p1[0]),
                           y1=float(p1[1]), cx=float((p0[0] + p1[0]) / 2), cy=float((p0[1] + p1[1]) / 2),
                           size=float(np.linalg.norm(p1 - p0)), label=label, occluded=False))
+    if distractors:
+        _add_distractors(big, rng, placed)
+        _pit_shapes(big, rng, truth)
     labels = cv2.resize(big, (SIZE, SIZE), interpolation=cv2.INTER_NEAREST)
     return labels, truth
+
+
+# ------------------------------------------------------------------ distractors (training data)
+TEXT = "ABCEFGHIJKLMNPRSTUVWXYZabcdefghijkmnpqrstuvwxyz2345789&%$#@!?SALEFRIDAYBLACKGIFTHAPPYNEWYEAR"
+FONTS = [cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX, cv2.FONT_HERSHEY_COMPLEX, cv2.FONT_HERSHEY_TRIPLEX,
+         cv2.FONT_HERSHEY_SCRIPT_COMPLEX, cv2.FONT_HERSHEY_COMPLEX_SMALL]  # (no O, Q, 0, o: those are rings)
+
+
+def _free_spot(rng, placed, R):
+    if 2 * R >= SIZE - 4:
+        return None
+    for _ in range(60):
+        c = rng.uniform(R, SIZE - R, 2)
+        if all(np.linalg.norm(c - q) > R + rq for q, rq in placed):
+            placed.append((c, R))
+            return c
+    return None
+
+
+def _blob(rng, r, n=200):
+    t = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    rad = np.ones(n)
+    for k in range(2, 5):  # lumpy, but not spiky (a spiky blob would look like a star)
+        rad += rng.uniform(0.04, 0.16) * np.sin(k * t + rng.uniform(0, 6.3))
+    return np.c_[r * rad * np.cos(t), r * rad * np.sin(t)]
+
+
+def _curve(rng, c, L, n=60):
+    """A wandering curve (curly string, ribbon centre line)."""
+    a = rng.uniform(0, 2 * np.pi)
+    pts = [np.asarray(c, float)]
+    turn = rng.uniform(-0.25, 0.25)
+    for _ in range(n):
+        a += turn + rng.normal(0, 0.15)
+        pts.append(pts[-1] + (L / n) * np.array([np.cos(a), np.sin(a)]))
+    return np.array(pts)
+
+
+def _add_distractors(big, rng, placed):
+    for _ in range(int(rng.integers(3, 8))):
+        kind = rng.choice(["text", "text", "text", "bow", "ribbon", "blob", "balloon", "scrap"])
+        label = int(rng.integers(1, 7))
+        if kind == "text":
+            txt = "".join(rng.choice(list(TEXT), int(rng.integers(1, 6))))
+            font = FONTS[int(rng.integers(len(FONTS)))]
+            scale = rng.uniform(0.8, 2.6)
+            th = int(rng.integers(2, 9))
+            (w, h), _ = cv2.getTextSize(txt, font, scale, th)
+            c = _free_spot(rng, placed, max(w, h) / 2 + 4)
+            if c is not None:
+                cv2.putText(big, txt, (int((c[0] - w / 2) * SS), int((c[1] + h / 2) * SS)), font, scale * SS, label,
+                            th * SS, cv2.LINE_8)
+        elif kind == "bow":  # two loops and a knot: one region
+            r = rng.uniform(15, 40)
+            c = _free_spot(rng, placed, 2.2 * r)
+            if c is not None:
+                a = rng.uniform(0, np.pi)
+                u = np.array([np.cos(a), np.sin(a)])
+                for sgn in (-1, 1):
+                    P = _blob(rng, r * 0.7) * [1.4, 0.8]
+                    P = P @ np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]]).T
+                    _fill(big, c + sgn * u * r * 0.9 + P, label)
+                _fill(big, c + _blob(rng, r * 0.35), label)
+        elif kind == "ribbon":  # a wavy band
+            L = rng.uniform(80, 200)
+            c = _free_spot(rng, placed, L / 2)
+            if c is not None:
+                C = _curve(rng, c, L)
+                C = C - (C.mean(0) - c)
+                w = rng.uniform(6, 22)
+                cv2.polylines(big, [np.round(C * SS).astype(np.int32)], False, label, int(w * SS))
+        elif kind == "blob":
+            r = rng.uniform(12, 45)
+            c = _free_spot(rng, placed, 1.6 * r)
+            if c is not None:
+                _fill(big, c + _blob(rng, r), label)
+        elif kind == "balloon":  # an egg with a knot and a curly string: fused into one region
+            r = rng.uniform(15, 35)
+            c = _free_spot(rng, placed, 3 * r)
+            if c is not None:
+                t = np.linspace(0, 2 * np.pi, 160, endpoint=False)
+                P = np.c_[0.85 * r * np.cos(t), r * np.sin(t) * (1 + 0.15 * np.sin(t))]
+                _fill(big, c + P, label)
+                _fill(big, c + np.array([[-5, 0.95 * r + 8], [5, 0.95 * r + 8], [0, 0.95 * r - 2]]), label)
+                S = _curve(rng, c + [0, r + 8], rng.uniform(40, 110))
+                cv2.polylines(big, [np.round(S * SS).astype(np.int32)], False, label, int(rng.uniform(1.5, 3.5) * SS))
+        else:  # curly scrap, like a quantization fringe or a hair line
+            c = _free_spot(rng, placed, 40)
+            if c is not None:
+                S = _curve(rng, c, rng.uniform(25, 80))
+                cv2.polylines(big, [np.round(S * SS).astype(np.int32)], False, label, int(rng.uniform(2, 5) * SS))
+
+
+def _pit_shapes(big, rng, truth):
+    """Small pits and bites on some true shapes (generated art has them): the label does not change."""
+    for t in truth:
+        if t["kind"] == "line" or rng.random() > 0.25:
+            continue
+        for _ in range(int(rng.integers(1, 4))):
+            a = rng.uniform(0, 2 * np.pi)
+            d = rng.uniform(0.3, 1.0) * t["size"]
+            p = (np.array([t["cx"], t["cy"]]) + d * np.array([np.cos(a), np.sin(a)])) * SS
+            cv2.circle(big, tuple(np.round(p).astype(int)), int(rng.uniform(0.6, 2.0) * SS), 0, -1)
 
 
 # ------------------------------------------------------------------ detection and matching

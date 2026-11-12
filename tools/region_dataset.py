@@ -1,6 +1,7 @@
 """Training data for the region classifier: synthetic scenes from the benchmark generator, cut into regions the
 way detect_shapes sees them (lines taken out, hidden masks from objects in front), each labelled with the true
-shape it holds - or "none" (pieces of lines, two shapes stuck together, line crossings, anti-aliasing scraps).
+shape it holds - or "none" (pieces of lines, two shapes stuck together, line crossings, text, bows, ribbons,
+blobs, balloons on strings, curly scraps).
 
     python tools/region_dataset.py OUT_DIR [--scenes 8000] [--seed 1000] [--chunk 500] [--workers 0]
 
@@ -24,7 +25,7 @@ import bench  # noqa: E402
 def scene_regions(seed):
     """(X, y) for one synthetic scene."""
     rng = np.random.default_rng(seed)
-    labels, truth = bench.make_scene(rng)
+    labels, truth = bench.make_scene(rng, distractors=True)
     lines = fs.find_lines(labels, background=0)
     shapes = [t for t in truth if t["kind"] != "line"]
     X, y = [], []
