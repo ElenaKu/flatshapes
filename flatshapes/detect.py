@@ -16,12 +16,15 @@ DETECTORS = {"circle": fit_circle, "ellipse": fit_ellipse, "polygon": fit_polygo
 ORDER = ("circle", "ring", "ellipse", "segment", "teardrop", "heart", "crescent", "polygon", "star")  # simple -> complex
 
 
-def detect_shape(mask, hidden=None, kinds=ORDER, slack=0.15, options=None, prefilter=True, slack_rel=0.5):
+def detect_shape(mask, hidden=None, kinds=ORDER, slack=0.15, options=None, prefilter=True, slack_rel=0.5, prior=None,
+                 prior_relax=1.5):
     """Best geometric model for one shape mask, or None.
     kinds:   detectors to try; options: {kind: {kwarg: value}} passed to that detector
     slack, slack_rel: a simpler model wins when its mean error is at most best * (1 + slack_rel) + slack px
              (an 8-vertex polygon with rounded corners hugs a sparkle a little closer than the 4-tip star)
-    prefilter: cheap shape features (features.py) skip detectors that cannot fit (no star fit on a round blob)"""
+    prefilter: cheap shape features (features.py) skip detectors that cannot fit (no star fit on a round blob)
+    prior: (kind, probability) from the region classifier when it is sure: that detector's limits are
+             prior_relax times looser and it wins unless another model fits clearly better"""
     options = options or {}
     fits = []
     if prefilter:
@@ -36,7 +39,17 @@ def detect_shape(mask, hidden=None, kinds=ORDER, slack=0.15, options=None, prefi
     # slack rule - that model would need an error below the ~0.2 px floor of pixel outlines - stop
     stop = 0.2 * (1 + slack_rel) + slack
     for k in sorted(kinds, key=lambda k: ORDER.index(k) if k in ORDER else 99):
-        f = DETECTORS[k](mask, hidden, **options.get(k, {}))
+        opt = dict(options.get(k, {}))
+        if prior and k == prior[0]:
+            # the classifier is sure it is this kind: its error limits are looser (a small dot's pixel staircase
+            # alone is ~0.5 px, a wobbly generated dot more)
+            import inspect
+            base = {n: q.default for n, q in inspect.signature(DETECTORS[k]).parameters.items()}
+            for key in ("max_mean", "max_p80"):
+                v = opt.get(key, base.get(key))
+                if v is not None:
+                    opt[key] = v * prior_relax
+        f = DETECTORS[k](mask, hidden, **opt)
         if f is not None:
             fits.append(f)
             if f.metrics["mean"] <= stop:
@@ -44,13 +57,19 @@ def detect_shape(mask, hidden=None, kinds=ORDER, slack=0.15, options=None, prefi
     if not fits:
         return None
     best = min(f.metrics["mean"] for f in fits)
+    if prior:
+        # the classifier's kind wins unless another model fits clearly better (a 9-gon hugs a lumpy dot a bit
+        # closer than the circle, but it is still a dot)
+        pf = [f for f in fits if f.kind == prior[0]]
+        if pf and pf[0].metrics["mean"] <= best * (1 + 2 * slack_rel) + 2 * slack:
+            return pf[0]
     ok = [f for f in fits if f.metrics["mean"] <= best * (1 + slack_rel) + slack]
     return min(ok, key=lambda f: (f.n_params, f.metrics["mean"]))
 
 
 def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, equal_radius=True, colours=None, rim=4,
                   underlay_share=0.5, lines=None, line_pad=3.0, workers=1, pieces=True, classifier=True,
-                  classifier_kw=None, **kw):
+                  classifier_kw=None, prior_min=0.85, **kw):
     """Run detect_shape on every connected component of every label of a label map (H, W).
     hidden_by_others: outline that touches another non-background label counts as hidden (the neighbour may be in
     front); parts of another label thinner than `rim` px (anti-aliasing fringes) do not count, nor does a label
@@ -80,7 +99,9 @@ def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, e
                 if ks is None:
                     kws.append(kw)
                 else:
-                    kws.append({**kw, "kinds": tuple(k for k in ks if k in allowed), "prefilter": False})
+                    top = int(np.argmax(p))
+                    pr = (classes[top], float(p[top])) if p[top] >= prior_min and classes[top] != "none" else None
+                    kws.append({**kw, "kinds": tuple(k for k in ks if k in allowed), "prefilter": False, "prior": pr})
     pool = get_pool(workers) if workers != 1 and len(comps) >= 6 else None
     if pool is not None:
         # biggest regions first so no worker is left with one large star fit at the end

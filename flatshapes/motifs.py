@@ -185,7 +185,10 @@ def _place_scores(region, todo, band, vis, tm, edge, min_inside, min_edge):
     e_vis = cv2.matchTemplate(vis, edge, cv2.TM_CCORR)
     on_edge = cv2.matchTemplate(band, edge, cv2.TM_CCORR) / np.maximum(e_vis, 1e-6)
     on_edge[e_vis < 0.5 * float(edge.sum())] = 0  # mostly hidden: no evidence
-    score = on_edge ** 4 * np.sqrt(np.clip(new / ta, 0, 1))
+    # a copy may reach under objects in front, but needlessly much of it there means it is too big or tilted
+    # (the hidden area always "fits"): prefer copies that stay on what is seen
+    under = np.clip(1.0 - cv2.matchTemplate(vis, tm, cv2.TM_CCORR) / ta, 0, 1)
+    score = on_edge ** 4 * np.sqrt(np.clip(new / ta, 0, 1)) * (1 - 0.8 * under)
     score[(inside < min_inside) | (new < 0.25 * ta) | (on_edge < min_edge)] = -1
     return score, inside
 
