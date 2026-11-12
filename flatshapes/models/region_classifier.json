@@ -1,0 +1,17 @@
+{
+ "classes": [
+  "none",
+  "circle",
+  "ellipse",
+  "polygon",
+  "star",
+  "ring",
+  "segment",
+  "teardrop",
+  "heart",
+  "crescent"
+ ],
+ "size": 64,
+ "val_accuracy": 0.991340782122905,
+ "scenes": 20000
+}
