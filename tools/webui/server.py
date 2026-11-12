@@ -27,13 +27,15 @@ from flatshapes import detect as fs_detect  # noqa: E402
 from shapes_report import quantize, _poly_of, _jsonable  # noqa: E402
 
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp")
-KINDS = ("circle", "ellipse", "polygon", "star")
+KINDS = ("circle", "ellipse", "polygon", "star", "ring", "segment", "teardrop", "heart", "crescent")
 # limits lifted to get metrics for a model that failed, so the inspector can say why
+RELAX_PAR = dict(max_mean=1e9, max_p80=1e9)
 RELAX = {
     "circle": dict(max_mean=1e9, max_p80=1e9, max_gap_deg=360, min_visible=0.0),
     "ellipse": dict(max_mean=1e9, max_p80=1e9, max_gap_deg=360, min_visible=0.0, max_aspect=1e9),
     "polygon": dict(max_mean=1e9, max_p80=1e9),
     "star": dict(max_mean=1e9, max_p80=1e9, max_area_err=1e9),
+    "ring": RELAX_PAR, "segment": RELAX_PAR, "teardrop": RELAX_PAR, "heart": RELAX_PAR, "crescent": RELAX_PAR,
 }
 
 STATE = {"root": "", "verdicts": "", "verdicts_fixed": False, "cache": {}, "lock": threading.Lock()}

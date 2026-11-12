@@ -1,7 +1,8 @@
 # flatshapes
 
 Geometric shape detection for vectorizing flat illustrations (clipart, icons, flat backgrounds).
-Finds **straight lines, circular arcs, circles, ellipses, polygons and stars** in shape masks and returns exact
+Finds **straight lines, circular arcs, circles, ellipses, rings, half circles and other cut circles, teardrops,
+hearts, crescents, polygons (sharp or rounded corners) and stars** in shape masks and returns exact
 SVG path data, so a dot becomes a true circle and a sparkle becomes a clean 4-point star instead of a cloud of
 Bezier nodes.
 
@@ -63,6 +64,11 @@ fs.fit_circle(mask, hidden)     # params: cx, cy, r
 fs.fit_ellipse(mask, hidden)    # params: cx, cy, a, b, theta
 fs.fit_polygon(mask, hidden)    # params: vertices, k
 fs.fit_star(mask, hidden)       # params: centre, tips, bend, k
+fs.fit_ring(mask, hidden)       # params: cx, cy, r_out, r_in (path: draw with fill-rule="evenodd")
+fs.fit_segment(mask, hidden)    # cut circle: cx, cy, r, theta, h (h = 0: half circle)
+fs.fit_teardrop(mask, hidden)   # cx, cy, r, theta (to the tip), L
+fs.fit_heart(mask, hidden)      # cx, cy, sx, sy, theta
+fs.fit_crescent(mask, hidden)   # cx, cy, r1, theta, d, r2
 fs.detect_lines(mask)           # thin straight strokes -> [ShapeFit(kind="line")]
 
 # whole label map (palette index per pixel)

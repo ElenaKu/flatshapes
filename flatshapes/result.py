@@ -23,7 +23,8 @@ class ShapeFit:
     @property
     def n_params(self):
         """Model complexity, used to prefer the simpler model when errors are close."""
-        return {"circle": 3, "ellipse": 5, "line": 4}.get(self.kind, 2 + 3 * int(self.params.get("k", 3)))
+        return {"circle": 3, "ring": 4, "ellipse": 5, "segment": 5, "teardrop": 5, "heart": 5, "crescent": 6,
+                "line": 4}.get(self.kind, 2 + 3 * int(self.params.get("k", 3)))
 
 
 def outline_points(mask, hidden=None, sub=4, every=2):

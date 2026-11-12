@@ -114,3 +114,28 @@ def test_split_stuck_copies():
     split = [i for i in mos[0].instances if i.get("split")]
     assert len(split) == 2
     assert sorted(round(i["cx"] / 10) for i in split) == [12, 17]
+
+
+def _draw_model(Q, hole=None):
+    import cv2
+    m = np.zeros((800, 800), np.uint8)
+    cv2.fillPoly(m, [np.round(Q * 4).astype(np.int32)], 1)
+    if hole is not None:
+        cv2.fillPoly(m, [np.round(hole * 4).astype(np.int32)], 0)
+    return cv2.resize(m, (200, 200), interpolation=cv2.INTER_NEAREST) > 0
+
+
+def test_new_simple_shapes():
+    from flatshapes import parametric as P
+    t = np.linspace(0, 2 * np.pi, 200)
+    cases = {
+        "ring": _draw_model(np.c_[100 + 60 * np.cos(t), 100 + 60 * np.sin(t)],
+                            np.c_[100 + 35 * np.cos(t), 100 + 35 * np.sin(t)]),
+        "segment": _draw_model(P._segment_model([100, 100, 60, 0.4, 0.0], 100)),
+        "teardrop": _draw_model(P._tear_model([90, 110, 40, -1.2, 80], 100)),
+        "heart": _draw_model(P._heart_model([100, 100, 55, 50, 0.2], 100)),
+        "crescent": _draw_model(P._crescent_model([100, 100, 60, 0.7, 30, 52], 100)),
+    }
+    for kind, m in cases.items():
+        f = fs.detect_shape(m)
+        assert f is not None and f.kind == kind, (kind, f and f.kind)

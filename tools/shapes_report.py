@@ -24,7 +24,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import flatshapes as fs  # noqa: E402
 
 KIND_BGR = {"circle": (255, 255, 0), "ellipse": (255, 80, 0), "polygon": (0, 200, 0), "star": (255, 0, 255),
-            "line": (0, 140, 255)}
+            "line": (0, 140, 255), "ring": (200, 255, 200), "segment": (0, 255, 200), "teardrop": (255, 180, 120),
+            "heart": (120, 80, 255), "crescent": (0, 230, 255)}
 
 
 def quantize(bgr, n_colors, seed=0, merge_de=10.0, tries=4):
@@ -76,6 +77,17 @@ def _poly_of(f):
     if f.kind == "star":
         from flatshapes.star import _model
         return _model(p["centre"], p["tips"], p["bend"], 30)
+    if f.kind in ("ring", "segment", "teardrop", "heart", "crescent"):
+        from flatshapes import parametric as par
+        if f.kind == "ring":  # outer circle, then the hole (drawn as one line through the gap)
+            t = np.linspace(0, 2 * np.pi, 120)
+            return np.vstack([np.c_[p["cx"] + p["r_out"] * np.cos(t), p["cy"] + p["r_out"] * np.sin(t)],
+                              np.c_[p["cx"] + p["r_in"] * np.cos(-t), p["cy"] + p["r_in"] * np.sin(-t)]])
+        model = {"segment": (par._segment_model, ("cx", "cy", "r", "theta", "h")),
+                 "teardrop": (par._tear_model, ("cx", "cy", "r", "theta", "L")),
+                 "heart": (par._heart_model, ("cx", "cy", "sx", "sy", "theta")),
+                 "crescent": (par._crescent_model, ("cx", "cy", "r1", "theta", "d", "r2"))}[f.kind]
+        return model[0]([p[k] for k in model[1]], 40)
     return np.asarray(p["vertices"])
 
 

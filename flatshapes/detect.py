@@ -8,8 +8,12 @@ from .ellipse import fit_ellipse
 from .polygon import fit_polygon
 from .star import fit_star
 
-DETECTORS = {"circle": fit_circle, "ellipse": fit_ellipse, "polygon": fit_polygon, "star": fit_star}
-ORDER = ("circle", "ellipse", "polygon", "star")  # simple -> complex
+from .parametric import fit_ring, fit_segment, fit_teardrop, fit_heart, fit_crescent
+
+DETECTORS = {"circle": fit_circle, "ellipse": fit_ellipse, "polygon": fit_polygon, "star": fit_star,
+             "ring": fit_ring, "segment": fit_segment, "teardrop": fit_teardrop, "heart": fit_heart,
+             "crescent": fit_crescent}
+ORDER = ("circle", "ring", "ellipse", "segment", "teardrop", "heart", "crescent", "polygon", "star")  # simple -> complex
 
 
 def detect_shape(mask, hidden=None, kinds=ORDER, slack=0.15, options=None, prefilter=True, slack_rel=0.5):
@@ -28,10 +32,15 @@ def detect_shape(mask, hidden=None, kinds=ORDER, slack=0.15, options=None, prefi
             ring = (cv2.dilate(np.asarray(mask, np.uint8), np.ones((3, 3), np.uint8)) > 0) & ~np.asarray(mask, bool)
             hs = float(np.asarray(hidden, bool)[ring].mean()) if ring.any() else 0.0
         kinds = candidate_kinds(shape_features(mask), hs, kinds)
-    for k in kinds:
+    # simple models first; once a fit is so close that no later (more complex) model could beat it under the
+    # slack rule - that model would need an error below the ~0.2 px floor of pixel outlines - stop
+    stop = 0.2 * (1 + slack_rel) + slack
+    for k in sorted(kinds, key=lambda k: ORDER.index(k) if k in ORDER else 99):
         f = DETECTORS[k](mask, hidden, **options.get(k, {}))
         if f is not None:
             fits.append(f)
+            if f.metrics["mean"] <= stop:
+                break
     if not fits:
         return None
     best = min(f.metrics["mean"] for f in fits)
@@ -145,6 +154,11 @@ def _shift(f, dx, dy, shape):
         p["centre"] = p["centre"] + [dx, dy]
         p["tips"] = p["tips"] + [dx, dy]
         f.path = star._path(p["centre"], p["tips"], p["bend"])
+    elif f.kind in ("ring", "segment", "teardrop", "heart", "crescent"):
+        from .parametric import PATHS
+        p["cx"] += dx
+        p["cy"] += dy
+        f.path = PATHS[f.kind](p)
     elif f.kind == "polygon":
         p["vertices"] = p["vertices"] + [dx, dy]
         from .polygon import polygon_path

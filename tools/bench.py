@@ -28,8 +28,9 @@ sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 import flatshapes as fs  # noqa: E402
 from flatshapes.star import _model as star_model  # noqa: E402
+from flatshapes import parametric as par  # noqa: E402
 
-KINDS = ("circle", "ellipse", "polygon", "star", "line")
+KINDS = ("circle", "ellipse", "polygon", "star", "ring", "segment", "teardrop", "heart", "crescent", "line")
 SIZE = 512
 SS = 4  # supersampling for drawing
 
@@ -72,7 +73,29 @@ def _densify(P, step=1.0):
 
 def random_shape(rng, kind=None):
     """(kind, sub-kind, outline (n, 2) around (0, 0), size, extra)."""
-    kind = kind or rng.choice(["circle", "ellipse", "triangle", "rect", "roundrect", "regular", "star5", "sparkle"])
+    kind = kind or rng.choice(["circle", "ellipse", "triangle", "rect", "roundrect", "regular", "star5", "sparkle",
+                               "ring", "segment", "teardrop", "heart", "crescent"])
+    if kind == "ring":
+        r = rng.uniform(20, 55)
+        t = np.linspace(0, 2 * np.pi, 240, endpoint=False)
+        return "ring", "ring", np.c_[r * np.cos(t), r * np.sin(t)], r, {"r_in": r * rng.uniform(0.4, 0.75)}
+    if kind == "segment":
+        r = rng.uniform(20, 55)
+        h = float(rng.choice([0.0, rng.uniform(-0.4, 0.4) * r]))
+        return "segment", "half circle" if h == 0 else "cut circle", par._segment_model(
+            [0, 0, r, rng.uniform(0, 6.3), h], 120), r, {}
+    if kind == "teardrop":
+        r = rng.uniform(15, 40)
+        return "teardrop", "teardrop", par._tear_model([0, 0, r, rng.uniform(0, 6.3), r * rng.uniform(1.5, 2.6)], 120), r, {}
+    if kind == "heart":
+        s = rng.uniform(20, 50)
+        return "heart", "heart", par._heart_model([0, 0, s, s * rng.uniform(0.85, 1.15), rng.normal(0, 0.3)], 60), s, {}
+    if kind == "crescent":
+        r1 = rng.uniform(25, 55)
+        Q = par._crescent_model([0, 0, r1, rng.uniform(0, 6.3), r1 * rng.uniform(0.3, 0.6), r1 * rng.uniform(0.8, 1.0)], 120)
+        if Q is not None:
+            return "crescent", "crescent", Q, r1, {}
+        return random_shape(rng, "circle")
     if kind == "circle":
         r = rng.uniform(8, 50)
         t = np.linspace(0, 2 * np.pi, 240, endpoint=False)
@@ -140,6 +163,12 @@ def make_scene(rng, n_shapes=(6, 11)):
         label = int(rng.integers(1, 7))
         Q = _wobble(P, wobble, rng) + c
         _fill(big, Q, label)
+        if kind == "ring":  # punch the hole (background or the underlay below it)
+            t = np.linspace(0, 2 * np.pi, 200, endpoint=False)
+            hole = np.round((c + extra["r_in"] * np.c_[np.cos(t), np.sin(t)]) * SS).astype(np.int32)
+            hm = np.zeros_like(big)
+            cv2.fillPoly(hm, [hole], 1)
+            big[hm > 0] = 0
         placed.append((c, R))
         truth.append(dict(kind=kind, sub=sub, cx=float(c[0]), cy=float(c[1]), size=float(size), label=label,
                           occluded=False, **{k: float(v) for k, v in extra.items()}))
@@ -185,7 +214,7 @@ def detect(labels, background=0):
     out = []
     for lab, _, f in shapes:
         p = f.params
-        if f.kind in ("circle", "ellipse"):
+        if "cx" in p:  # model origin: circle centre (also of a cut circle / round end of a teardrop / outer disc)
             c = (p["cx"], p["cy"])
         elif f.kind == "star":
             c = tuple(p["centre"])
