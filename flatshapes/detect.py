@@ -40,7 +40,7 @@ def detect_shape(mask, hidden=None, kinds=ORDER, slack=0.15, options=None, prefi
 
 
 def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, equal_radius=True, colours=None, rim=4,
-                  underlay_share=0.5, lines=None, line_pad=3.0, **kw):
+                  underlay_share=0.5, lines=None, line_pad=3.0, workers=1, **kw):
     """Run detect_shape on every connected component of every label of a label map (H, W).
     hidden_by_others: outline that touches another non-background label counts as hidden (the neighbour may be in
     front); parts of another label thinner than `rim` px (anti-aliasing fringes) do not count, nor does a label
@@ -48,11 +48,21 @@ def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, e
     the shapes (strip widened by line_pad px on each side: drawn strokes are not perfectly straight) and
     count as objects in front, so a star with strings glued to it is fitted as a star. colours:
     optional {label: CIELAB} for grouping same-size dots. Returns a list of
-    (label, component index, ShapeFit)."""
+    (label, component index, ShapeFit).
+    workers: processes for the per-region fits (1 = none, None or 0 = all cores); the pool is started once and
+    reused. On Windows the calling script needs the usual `if __name__ == "__main__":` guard."""
     out = []
-    for lab, i, m, hid, x0, y0 in components(labels, background, min_area, hidden_by_others, rim, underlay_share,
-                                            lines, line_pad):
-        f = detect_shape(m, hid, **kw)
+    comps = list(components(labels, background, min_area, hidden_by_others, rim, underlay_share, lines, line_pad))
+    pool = get_pool(workers) if workers != 1 and len(comps) >= 6 else None
+    if pool is not None:
+        # biggest regions first so no worker is left with one large star fit at the end
+        order = sorted(range(len(comps)), key=lambda j: -int(comps[j][2].sum()))
+        futs = {j: pool.submit(_detect_task, comps[j][2], comps[j][3], kw) for j in order}
+        fits = {j: futs[j].result() for j in order}
+    else:
+        fits = {j: detect_shape(c[2], c[3], **kw) for j, c in enumerate(comps)}
+    for j, (lab, i, m, hid, x0, y0) in enumerate(comps):
+        f = fits[j]
         if f is None:
             continue
         _shift(f, x0, y0, np.asarray(labels).shape)
@@ -62,6 +72,27 @@ def detect_shapes(labels, background=None, min_area=40, hidden_by_others=True, e
         cols = [colours[l] for l, _, f in out if f.kind == "circle"] if colours else None
         equalize_radii(circ, cols)
     return out
+
+
+_POOL = {"pool": None, "n": 0}
+
+
+def get_pool(workers=None):
+    """Shared process pool (started on first use, reused by later calls). workers None/0 = all cores."""
+    import os
+    from concurrent.futures import ProcessPoolExecutor
+    n = workers or os.cpu_count() or 1
+    if n <= 1:
+        return None
+    if _POOL["pool"] is None or _POOL["n"] != n:
+        if _POOL["pool"] is not None:
+            _POOL["pool"].shutdown(cancel_futures=True)
+        _POOL["pool"], _POOL["n"] = ProcessPoolExecutor(max_workers=n), n
+    return _POOL["pool"]
+
+
+def _detect_task(m, hid, kw):
+    return detect_shape(m, hid, **kw)
 
 
 def components(labels, background=None, min_area=40, hidden_by_others=True, rim=4, underlay_share=0.5, lines=None,

@@ -11,7 +11,7 @@ from .star import fit_star
 from .lines import detect_lines, merge_collinear, same_sides
 from .geom import fit_open, fit_closed, reverse_segments, sample_segment
 from .svg import segments_to_d
-from .detect import detect_shape, detect_shapes, occluders, find_lines, components
+from .detect import detect_shape, detect_shapes, occluders, find_lines, components, get_pool
 
 from .features import shape_features, candidate_kinds
 from .symmetry import Symmetry, find_symmetry, symmetrize

@@ -9,7 +9,7 @@ and summary.csv for the whole run.
 The image is quantized to a few colours (k-means in CIELAB) to get the label map; flatshapes itself works on
 the label map, so for real use pass the labels from your own vectorizer.
 
-Usage: python tools/shapes_report.py INPUT_DIR OUTPUT_DIR [--colors 8] [--min-area 60]
+Usage: python tools/shapes_report.py INPUT_DIR OUTPUT_DIR [--colors 8] [--min-area 60] [--workers 0]
 """
 import argparse
 import csv
@@ -27,26 +27,34 @@ KIND_BGR = {"circle": (255, 255, 0), "ellipse": (255, 80, 0), "polygon": (0, 200
             "line": (0, 140, 255)}
 
 
-def quantize(bgr, n_colors, seed=0, merge_de=10.0):
+def quantize(bgr, n_colors, seed=0, merge_de=10.0, tries=4):
     """Label map from k-means in CIELAB, with a 3x3 median to drop anti-aliasing specks. Clusters closer than
     merge_de (CIELAB distance) are one colour (a dark background split in two would otherwise hide every shape on
-    it). Returns (labels, lab colours, background label = most frequent)."""
+    it). k-means runs from `tries` seeds and keeps the result with the fewest colours after merging (a smooth dark
+    gradient split into extra bands makes false shape edges), ties by tighter clusters. Deterministic for an image.
+    Returns (labels, lab colours, background label = most frequent)."""
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).reshape(-1, 3).astype(np.float32)
     rng = np.random.default_rng(seed)
     sample = lab[rng.choice(len(lab), min(len(lab), 60000), replace=False)]
     crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.5)
-    _, _, centres = cv2.kmeans(sample, n_colors, None, crit, 3, cv2.KMEANS_PP_CENTERS)
+    best = None
+    for t in range(tries):
+        cv2.setRNGSeed(seed + t)  # same colours whatever ran before (or in which process)
+        comp, lab_s, centres = cv2.kmeans(sample, n_colors, None, crit, 3, cv2.KMEANS_PP_CENTERS)
+        # OpenCV 8-bit Lab -> CIELAB
+        cie = centres.astype(float) * np.array([100 / 255, 1, 1]) - np.array([0, 128, 128])
+        area = np.bincount(lab_s.ravel(), minlength=n_colors)
+        target = np.arange(n_colors)
+        for i in np.argsort(-area):  # big clusters absorb near small ones
+            for j in np.argsort(-area):
+                if area[j] < area[i] and target[j] == j and target[i] == i and np.linalg.norm(cie[i] - cie[j]) < merge_de:
+                    target[j] = i
+        key = (len(set(target.tolist())), comp)
+        if best is None or key < best[0]:
+            best = (key, centres, cie, target)
+    _, centres, cie, target = best
     d = ((lab[:, None, :] - centres[None]) ** 2).sum(2)
-    labels = d.argmin(1).astype(np.uint8).reshape(bgr.shape[:2])
-    # OpenCV 8-bit Lab -> CIELAB
-    cie = centres.astype(float) * np.array([100 / 255, 1, 1]) - np.array([0, 128, 128])
-    area = np.bincount(labels.ravel(), minlength=n_colors)
-    target = np.arange(n_colors)
-    for i in np.argsort(-area):  # big clusters absorb near small ones
-        for j in np.argsort(-area):
-            if area[j] < area[i] and target[j] == j and target[i] == i and np.linalg.norm(cie[i] - cie[j]) < merge_de:
-                target[j] = i
-    labels = target[labels].astype(np.uint8)
+    labels = target[d.argmin(1)].astype(np.uint8).reshape(bgr.shape[:2])
     labels = cv2.medianBlur(labels, 3)
     bg = int(np.bincount(labels.ravel(), minlength=n_colors).argmax())
     return labels, cie, bg
@@ -113,6 +121,10 @@ def process(path, out_base, args):
     return counts
 
 
+def _job(a):
+    return process(*a)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input")
@@ -120,17 +132,27 @@ def main():
     ap.add_argument("--colors", type=int, default=8)
     ap.add_argument("--min-area", type=int, default=60)
     ap.add_argument("--min-line", type=float, default=30.0)
+    ap.add_argument("--workers", type=int, default=0, help="processes, one image each (0 = all cores)")
     args = ap.parse_args()
-    summary = []
+    jobs = []
     for root, _, files in os.walk(args.input):
         for name in sorted(files):
             if not name.lower().endswith((".png", ".jpg", ".jpeg")):
                 continue
             rel = os.path.relpath(os.path.join(root, name), args.input)
-            out_base = os.path.join(args.output, os.path.splitext(rel)[0])
-            counts = process(os.path.join(root, name), out_base, args)
-            if counts is not None:
-                summary.append(dict(file=rel, **counts))
+            jobs.append((rel, os.path.join(root, name), os.path.join(args.output, os.path.splitext(rel)[0])))
+    summary = []
+    n = args.workers or os.cpu_count() or 1
+    if n > 1 and len(jobs) > 1:
+        # one image per process: scales with the cores for whole folders
+        from concurrent.futures import ProcessPoolExecutor
+        with ProcessPoolExecutor(max_workers=n) as ex:
+            results = list(ex.map(_job, [(src, dst, args) for _, src, dst in jobs]))
+    else:
+        results = [process(src, dst, args) for _, src, dst in jobs]
+    for (rel, _, _), counts in zip(jobs, results):
+        if counts is not None:
+            summary.append(dict(file=rel, **counts))
     if summary:
         os.makedirs(args.output, exist_ok=True)
         with open(os.path.join(args.output, "summary.csv"), "w", newline="") as fh:

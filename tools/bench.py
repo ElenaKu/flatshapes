@@ -305,6 +305,12 @@ def real_score(image_dir, verdict_dir):
 
 
 # ------------------------------------------------------------------ report
+def _timed_detect(L):
+    t0 = time.perf_counter()
+    d = detect(L)
+    return d, time.perf_counter() - t0
+
+
 def _f(v):
     return "  -  " if v is None else f"{v:5.2f}"
 
@@ -318,6 +324,8 @@ def main():
     ap.add_argument("--export")
     ap.add_argument("--real")
     ap.add_argument("--verdicts")
+    ap.add_argument("--workers", type=int, default=1,
+                    help="processes, one scene each (0 = all cores); the time per image stays single-core")
     a = ap.parse_args()
 
     rng = np.random.default_rng(a.seed)
@@ -332,16 +340,20 @@ def main():
                 json.dump(truth, fh, indent=1)
         print(f"Exported {len(scenes)} scenes to {a.export}")
 
-    all_truth, all_dets, times = [], [], []
-    detect(scenes[0][0])  # warm-up (imports, caches)
-    for L, truth in scenes:
-        t0 = time.perf_counter()
-        dets = detect(L)
-        times.append(time.perf_counter() - t0)
-        all_truth.append(truth)
-        all_dets.append(dets)
+    all_truth = [t for _, t in scenes]
+    t_wall = time.perf_counter()
+    if a.workers != 1:
+        from concurrent.futures import ProcessPoolExecutor
+        with ProcessPoolExecutor(max_workers=a.workers or None) as ex:
+            out = list(ex.map(_timed_detect, [L for L, _ in scenes]))
+    else:
+        detect(scenes[0][0])  # warm-up (imports, caches)
+        out = [_timed_detect(L) for L, _ in scenes]
+    wall = time.perf_counter() - t_wall
+    all_dets = [d for d, _ in out]
+    times = [t for _, t in out]
     st, conf, sub = score(all_truth, all_dets)
-    res = dict(scenes=a.scenes, seed=a.seed, sec_per_image=float(np.mean(times)), sec_max=float(np.max(times)),
+    res = dict(scenes=a.scenes, seed=a.seed, wall_sec=wall, sec_per_image=float(np.mean(times)), sec_max=float(np.max(times)),
                kinds=st, confusion=conf, subkinds=sub, version=getattr(fs, "__version__", "?"))
     if a.real:
         res["real"] = real_score(os.path.abspath(a.real), os.path.abspath(
@@ -360,7 +372,8 @@ def main():
 
     print(f"\n{a.scenes} synthetic scenes ({SIZE}x{SIZE}), seed {a.seed}")
     print(f"time per image: {res['sec_per_image']:.2f} s (max {res['sec_max']:.2f})"
-          + (delta(res["sec_per_image"], old.get("sec_per_image")) + " s" if old else ""))
+          + (delta(res["sec_per_image"], old.get("sec_per_image")) + " s" if old else "")
+          + f"; all scenes {wall:.1f} s wall with {a.workers or os.cpu_count()} process(es)")
     print(f"\n{'kind':9} {'tp':>4} {'fp':>4} {'fn':>4}  {'prec':>5} {'recall':>6} {'F1':>5}")
     for k in KINDS:
         v = st[k]

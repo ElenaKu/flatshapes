@@ -170,7 +170,7 @@ def run_detect(req):
         kw = {k: lo[k] for k in ("max_angle", "max_offset", "max_gap", "min_len", "max_width", "body_r") if k in lo}
         lines = fs.find_lines(labels, background=bg, **kw)
     found = fs.detect_shapes(labels, background=bg, min_area=int(s.get("min_area", 60)), rim=int(s.get("rim", 4)),
-                             underlay_share=float(s.get("underlay", 0.5)), lines=lines,
+                             underlay_share=float(s.get("underlay", 0.5)), lines=lines, workers=None,
                              kinds=kinds, slack=float(s.get("slack", 0.15)), options=opts,
                              colours={i: cols[i] for i in range(len(cols))}) if kinds else []
     shapes = [_shape_json(f, lab, f"s{n}") for n, (lab, _, f) in enumerate(found)]
