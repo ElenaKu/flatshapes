@@ -77,80 +77,124 @@ def _fit_star(K, occ, off, size, min_ratio, max_mean, max_p80, best_share, k_ran
     P = P + [x0, y0]
     hidden |= (P[:, 0] < 1) | (P[:, 1] < 1) | (P[:, 0] > W - 1) | (P[:, 1] > H - 1)
     vis = ~hidden
-    if vis.mean() < 0.45:
+    if vis.mean() < 0.35:  # (a string through the middle hides two tips and their sides)
         return None
     d = P - C0
     rr = np.hypot(d[:, 0], d[:, 1])
     ang = np.arctan2(d[:, 1], d[:, 0])
-    win = max(2, N // 60)
-    rs = np.convolve(np.r_[rr[-win:], rr, rr[:win]], np.ones(2 * win + 1) / (2 * win + 1), "valid")
-    span = max(3, N // 16)
-    peaks = []
-    for i in range(N):
-        if not vis[i] or rr[i] < min_ratio * r_in:
-            continue
-        idx = np.arange(i - span, i + span + 1) % N
-        if rs[i] >= rs[idx].max() - 1e-9:
-            peaks.append(i)
-    # one tip per lobe: merge peaks closer than 25 degrees
-    peaks.sort(key=lambda i: -rr[i])
-    tips = []
-    for i in peaks:
-        if all(abs((ang[i] - ang[j] + np.pi) % (2 * np.pi) - np.pi) > np.radians(25) for j in tips):
-            tips.append(i)
-    if len(tips) < 2:
-        return None
-    ta = sorted((float(ang[i]), P[i]) for i in tips)
-    angs = np.array([a for a, _ in ta])
-    T = [p for _, p in ta]
-    gaps = np.diff(np.r_[angs, angs[0] + 2 * np.pi])
-    med = float(np.median(gaps))
-    if len(T) == 2:
-        # two opposite tips seen, the other two under lines (strings through the top and bottom tips)
-        if abs(abs((angs[1] - angs[0] + np.pi) % (2 * np.pi) - np.pi) - np.pi) > np.radians(25):
+    def _standard():
+        """Tips from peaks of the visible outline's distance to the centre; hidden tips put back by symmetry."""
+        win = max(2, N // 60)
+        rs = np.convolve(np.r_[rr[-win:], rr, rr[:win]], np.ones(2 * win + 1) / (2 * win + 1), "valid")
+        span = max(3, N // 16)
+        peaks = []
+        for i in range(N):
+            if not vis[i] or rr[i] < min_ratio * r_in:
+                continue
+            idx = np.arange(i - span, i + span + 1) % N
+            if rs[i] >= rs[idx].max() - 1e-9:
+                peaks.append(i)
+        # one tip per lobe: merge peaks closer than 25 degrees
+        peaks.sort(key=lambda i: -rr[i])
+        tips = []
+        for i in peaks:
+            if all(abs((ang[i] - ang[j] + np.pi) % (2 * np.pi) - np.pi) > np.radians(25) for j in tips):
+                tips.append(i)
+        if len(tips) < 2:
             return None
-        med = np.pi / 2  # two opposite tips seen, the other two under a line: a 4-point star is tried
-    rmed = float(np.median([np.linalg.norm(p - C0) for p in T]))
-    # a tip hidden under lines: put back at even spacing
-    ins = []
-    for i, g in enumerate(gaps):
-        m = int(round(g / med)) - 1
-        if g > 1.6 * med and m >= 1:
-            for j in range(1, m + 1):
-                a = angs[i] + g * j / (m + 1)
-                # radius of the opposite tip if there is one (a star is point-symmetric), else the median
-                opp = [np.linalg.norm(p - C0) for aa, p in zip(angs, T)
-                       if abs((aa - a - np.pi + np.pi) % (2 * np.pi) - np.pi) < np.radians(25)]
-                ri = float(opp[0]) if opp else rmed
-                ins.append((a, C0 + ri * np.array([np.cos(a), np.sin(a)])))
-    hid = [False] * len(T)
-    if ins:
-        allt = sorted([(a % (2 * np.pi), p, False) for a, p in zip(angs, T)] + [(a % (2 * np.pi), p, True) for a, p in ins], key=lambda t: t[0])
-        T = [p for _, p, _ in allt]
-        hid = [hh_ for _, _, hh_ in allt]
-        angs = np.array([a for a, _, _ in allt])
+        ta = sorted((float(ang[i]), P[i]) for i in tips)
+        angs = np.array([a for a, _ in ta])
+        T = [p for _, p in ta]
         gaps = np.diff(np.r_[angs, angs[0] + 2 * np.pi])
-    k = len(T)
-    if not k_range[0] <= k <= k_range[1] or gaps.max() > 2.0 * np.median(gaps):
+        med = float(np.median(gaps))
+        if len(T) == 2:
+            # two opposite tips seen, the other two under lines (strings through the top and bottom tips)
+            if abs(abs((angs[1] - angs[0] + np.pi) % (2 * np.pi) - np.pi) - np.pi) > np.radians(25):
+                return None
+            med = np.pi / 2  # two opposite tips seen, the other two under a line: a 4-point star is tried
+        rmed = float(np.median([np.linalg.norm(p - C0) for p in T]))
+        # a tip hidden under lines: put back at even spacing
+        ins = []
+        for i, g in enumerate(gaps):
+            m = int(round(g / med)) - 1
+            if g > 1.6 * med and m >= 1:
+                for j in range(1, m + 1):
+                    a = angs[i] + g * j / (m + 1)
+                    # radius of the opposite tip if there is one (a star is point-symmetric), else the median
+                    opp = [np.linalg.norm(p - C0) for aa, p in zip(angs, T)
+                           if abs((aa - a - np.pi + np.pi) % (2 * np.pi) - np.pi) < np.radians(25)]
+                    ri = float(opp[0]) if opp else rmed
+                    ins.append((a, C0 + ri * np.array([np.cos(a), np.sin(a)])))
+        hid = [False] * len(T)
+        if ins:
+            allt = sorted([(a % (2 * np.pi), p, False) for a, p in zip(angs, T)] + [(a % (2 * np.pi), p, True) for a, p in ins], key=lambda t: t[0])
+            T = [p for _, p, _ in allt]
+            hid = [hh_ for _, _, hh_ in allt]
+            angs = np.array([a for a, _, _ in allt])
+            gaps = np.diff(np.r_[angs, angs[0] + 2 * np.pi])
+        k = len(T)
+        if not k_range[0] <= k <= k_range[1] or gaps.max() > 2.0 * np.median(gaps):
+            return None
+        # a tip that runs on along a line (the line was not fully covered by its strip) is much longer than the
+        # opposite tip: cut to the opposite length
+        if k % 2 == 0:
+            T = [np.array(p, float) for p in T]
+            for i in range(k):
+                j = (i + k // 2) % k
+                # centre for this pair: midpoint of the most even opposite pair among the others (4 tips: the cross pair)
+                others = [(abs(np.log(max(1e-6, np.linalg.norm(T[a] - C0)) / max(1e-6, np.linalg.norm(T[(a + k // 2) % k] - C0)))), a)
+                          for a in range(k // 2) if a % (k // 2) != i % (k // 2)]
+                Cp = C0
+                if others:
+                    a = min(others)[1]
+                    Cp = (T[a] + T[(a + k // 2) % k]) / 2
+                rad = {i: float(np.linalg.norm(T[i] - Cp)), j: float(np.linalg.norm(T[j] - Cp))}
+                if rad[i] > 1.4 * rad[j]:
+                    if True:  # opposite tips of a star are about equal; a much longer one has a line glued on
+                        T[i] = Cp + (T[i] - Cp) * (rad[j] / rad[i])
+                        hid[i] = True
+        return T, hid
+
+    def _periodic():
+        """Fallback when too few tips show (strings through the star, a big part hidden): for every k, the turn
+        whose k evenly spaced directions meet the farthest visible outline; hidden tips get the median radius."""
+        vis_i = np.nonzero(vis)[0]
+        if len(vis_i) < 20:
+            return None
+        best = None
+        for k in range(k_range[0], k_range[1] + 1):
+            for ph in np.linspace(0, 2 * np.pi / k, 24, endpoint=False):
+                dirs = ph + np.arange(k) * 2 * np.pi / k
+                rads = []
+                for a in dirs:
+                    dd = np.abs((ang[vis_i] - a + np.pi) % (2 * np.pi) - np.pi)
+                    near = vis_i[dd < np.radians(6)]
+                    rads.append(float(rr[near].max()) if len(near) else np.nan)
+                rads = np.array(rads)
+                seen = ~np.isnan(rads)
+                if seen.sum() < max(2, k // 2):
+                    continue
+                score = float(np.nanmean(rads)) - 0.5 * float(np.nanstd(rads))  # long, even tips
+                if best is None or score > best[0]:
+                    best = (score, k, dirs, rads)
+        if best is None or best[0] < min_ratio * r_in:
+            return None
+        _, k, dirs, rads = best
+        rmed = float(np.nanmedian(rads))
+        if rmed < 8 or r_in < 2.5:  # line crossings and specks are not stars worth guessing
+            return None
+        hid = list(np.isnan(rads))
+        rads = np.where(np.isnan(rads), rmed, rads)
+        T = [C0 + r * np.array([np.cos(a), np.sin(a)]) for a, r in zip(dirs, rads)]
+        return T, hid
+
+    res_t = _standard()
+    if res_t is None and (~vis).any():
+        res_t = _periodic()
+    if res_t is None:
         return None
-    # a tip that runs on along a line (the line was not fully covered by its strip) is much longer than the
-    # opposite tip: cut to the opposite length
-    if k % 2 == 0:
-        T = [np.array(p, float) for p in T]
-        for i in range(k):
-            j = (i + k // 2) % k
-            # centre for this pair: midpoint of the most even opposite pair among the others (4 tips: the cross pair)
-            others = [(abs(np.log(max(1e-6, np.linalg.norm(T[a] - C0)) / max(1e-6, np.linalg.norm(T[(a + k // 2) % k] - C0)))), a)
-                      for a in range(k // 2) if a % (k // 2) != i % (k // 2)]
-            Cp = C0
-            if others:
-                a = min(others)[1]
-                Cp = (T[a] + T[(a + k // 2) % k]) / 2
-            rad = {i: float(np.linalg.norm(T[i] - Cp)), j: float(np.linalg.norm(T[j] - Cp))}
-            if rad[i] > 1.4 * rad[j]:
-                if True:  # opposite tips of a star are about equal; a much longer one has a line glued on
-                    T[i] = Cp + (T[i] - Cp) * (rad[j] / rad[i])
-                    hid[i] = True
+    T, hid = res_t
+    k = len(T)
     T0 = np.array(T)
     Pv_all = P[vis]
     # the fit runs on at most 400 outline points (the acceptance check below uses all of them)

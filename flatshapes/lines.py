@@ -88,6 +88,9 @@ def detect_lines(mask, body_r=4.0, min_len=20.0, max_width=9.0, hough_threshold=
         segs = merge_collinear(segs, **merge_kw)
     dt = cv2.distanceTransform(K, cv2.DIST_L2, 5)
     h, w = K.shape
+    # where a stroke runs through a thick body (a string through a star) neither its width nor the empty space
+    # beside it can be judged: those samples are left out
+    near_body = cv2.dilate(body, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k + 5, 2 * k + 5))) > 0
     out = []
     for p0, p1 in segs:
         L = float(np.linalg.norm(p1 - p0))
@@ -99,7 +102,10 @@ def detect_lines(mask, body_r=4.0, min_len=20.0, max_width=9.0, hough_threshold=
         on = dv > 0
         if on.mean() < 0.5:
             continue
-        width = 2.0 * float(np.median(dv[on]))
+        free_part = ~near_body[q[:, 1], q[:, 0]]
+        if free_part.sum() < max(4, 0.25 * len(q)):
+            continue
+        width = 2.0 * float(np.median(dv[on & free_part])) if (on & free_part).any() else 2.0 * float(np.median(dv[on]))
         if width > max_width:
             continue
         # a real stroke has empty space on both sides; a straight run along the edge of a big shape (a letter)
@@ -107,8 +113,9 @@ def detect_lines(mask, body_r=4.0, min_len=20.0, max_width=9.0, hough_threshold=
         u = (p1 - p0) / L
         nrm = np.array([-u[1], u[0]])
         free = []
+        tf = t[free_part]
         for sgn in (1, -1):
-            qs = np.round(p0 + t[:, None] * (p1 - p0) + sgn * (width / 2 + side_gap) * nrm).astype(int)
+            qs = np.round(p0 + tf[:, None] * (p1 - p0) + sgn * (width / 2 + side_gap) * nrm).astype(int)
             inside = (qs[:, 0] >= 0) & (qs[:, 1] >= 0) & (qs[:, 0] < w) & (qs[:, 1] < h)
             qs = qs[inside]
             free.append(float((K[qs[:, 1], qs[:, 0]] == 0).mean()) if len(qs) else 1.0)
@@ -119,22 +126,23 @@ def detect_lines(mask, body_r=4.0, min_len=20.0, max_width=9.0, hough_threshold=
     return out
 
 
-def same_sides(line, labels, offset=None, min_share=0.7):
-    """True when a line has the same label on both sides (a stroke over one background), judged on samples
-    `offset` px beyond its edges (default width / 2 + 2). An anti-aliasing rim along the edge of a shape has the
-    shape on one side and the background on the other, so it fails."""
+def same_sides(line, labels, offset=None, min_share=0.6):
+    """True when the line has the same colour on both sides along most of its length (a stroke over its
+    background, which may change along the way: from the background onto a card and back). An anti-aliasing rim
+    along the edge of a shape has the shape on one side and something else on the other all along, so it fails.
+    Samples are `offset` px beyond the stroke edges (default width / 2 + 2)."""
     L = np.asarray(labels)
     h, w = L.shape
-    p0, p1 = line.params["p0"], line.params["p1"]
+    p0, p1 = np.asarray(line.params["p0"], float), np.asarray(line.params["p1"], float)
     off = line.params["width"] / 2 + 2.0 if offset is None else offset
     n = max(4, int(np.linalg.norm(p1 - p0)))
     u = (p1 - p0) / max(1e-9, np.linalg.norm(p1 - p0))
     nrm = np.array([-u[1], u[0]])
-    t = np.linspace(0.1, 0.9, n)[:, None]
-    sides = []
-    for sgn in (1, -1):
-        q = np.clip(np.round(p0 + t * (p1 - p0) + sgn * off * nrm).astype(int), 0, [w - 1, h - 1])
-        v = L[q[:, 1], q[:, 0]]
-        vals, cnt = np.unique(v, return_counts=True)
-        sides.append((vals[cnt.argmax()], cnt.max() / len(v)))
-    return sides[0][0] == sides[1][0] and min(sides[0][1], sides[1][1]) >= min_share
+    t = np.linspace(0.05, 0.95, n)[:, None]
+    q = [np.round(p0 + t * (p1 - p0) + sgn * off * nrm).astype(int) for sgn in (1, -1)]
+    inside = np.all([(qq[:, 0] >= 0) & (qq[:, 1] >= 0) & (qq[:, 0] < w) & (qq[:, 1] < h) for qq in q], axis=0)
+    if inside.sum() < 4:
+        return False
+    a = L[q[0][inside, 1], q[0][inside, 0]]
+    b = L[q[1][inside, 1], q[1][inside, 0]]
+    return float((a == b).mean()) >= min_share

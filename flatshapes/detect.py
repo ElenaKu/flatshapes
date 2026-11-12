@@ -193,12 +193,14 @@ def _shift(f, dx, dy, shape):
         f.mask = full
 
 
-def occluders(L, m, lab, background=None, rim=4, underlay_share=0.5):
+def occluders(L, m, lab, background=None, rim=4, underlay_share=0.5, underlay_box=0.35):
     """Mask of outline that may be covered by objects in front, for component `m` (bool, same crop as label map L)
     of label `lab`. Other labels count, except:
       - the background;
       - a label that fills at least `underlay_share` of the 2 px ring around the shape: the shape lies on it
         (a star on a bag, a dot on a ribbon), it is not in front;
+      - a label filling at least `underlay_box` of the crop around the shape: a big area the shape sits across
+        the edge of (objects in front are usually smaller than that);
       - parts thinner than `rim` px (anti-aliasing fringes)."""
     import cv2
     m8 = m.astype(np.uint8)
@@ -209,7 +211,11 @@ def occluders(L, m, lab, background=None, rim=4, underlay_share=0.5):
     if ring.any():
         vals, cnt = np.unique(L[ring], return_counts=True)
         for v, c in zip(vals, cnt):
-            if v != lab and c >= underlay_share * ring.sum():
+            if v == lab:
+                continue
+            # the shape lies on it: it surrounds the shape - or it is a big area the shape sits across the edge
+            # of (a star on the border of a card fills a good part of the box around the star with the card)
+            if c >= underlay_share * ring.sum() or np.count_nonzero(L == v) >= underlay_box * L.size:
                 other &= L != v
     body = cv2.morphologyEx(other.astype(np.uint8), cv2.MORPH_OPEN, np.ones((rim + 1, rim + 1), np.uint8))
     return cv2.dilate(body, np.ones((3, 3), np.uint8)) > 0

@@ -199,6 +199,13 @@ def make_scene(rng, n_shapes=(6, 11)):
             cv2.line(big, tuple(np.round((c - d) * SS).astype(int)), tuple(np.round((c + d) * SS).astype(int)),
                      label, int(w * SS))
             truth[-1]["string"] = True
+            # the string itself is a real line: two visible pieces, one on each side of the sparkle
+            for sgn in (-1, 1):
+                p0, p1 = c + sgn * d * (R * 0.45 / np.linalg.norm(d)), c + sgn * d
+                p1 = np.clip(p1, 0, SIZE - 1)
+                truth.append(dict(kind="line", sub="string", x0=float(p0[0]), y0=float(p0[1]), x1=float(p1[0]),
+                                  y1=float(p1[1]), cx=float((p0[0] + p1[0]) / 2), cy=float((p0[1] + p1[1]) / 2),
+                                  size=float(np.linalg.norm(p1 - p0)), label=label, occluded=False))
     # a dot stuck to another shape of the same colour (one region: found only from outline pieces)
     for _ in range(int(rng.integers(0, 3))):
         r = rng.uniform(10, 30)
@@ -263,10 +270,25 @@ def detect(labels, background=0):
 
 
 def _line_match(t, d, tol=6.0):
+    """Same segment (both ends within tolerance) - or, for a string through a shape, a detection covering the
+    visible piece along the same line (one line drawn through the shape is right too)."""
     a = np.array([[t["x0"], t["y0"]], [t["x1"], t["y1"]]])
     b = np.array([[d["x0"], d["y0"]], [d["x1"], d["y1"]]])
+    tl = max(tol, 0.08 * t["size"])
     e = min(np.linalg.norm(a - b, axis=1).max(), np.linalg.norm(a - b[::-1], axis=1).max())
-    return e <= max(tol, 0.08 * t["size"])
+    if e <= tl:
+        return True
+    if t.get("sub") == "string":
+        u = b[1] - b[0]
+        L = np.linalg.norm(u)
+        if L < 1e-6:
+            return False
+        u /= L
+        nrm = np.array([-u[1], u[0]])
+        off = np.abs((a - b[0]) @ nrm)
+        tt = (a - b[0]) @ u
+        return off.max() <= tl and tt.min() >= -tl and tt.max() <= L + tl
+    return False
 
 
 def match(truth, dets):
@@ -289,6 +311,14 @@ def match(truth, dets):
             pairs.append((i, j))
             ut.discard(i)
             ud.discard(j)
+    # a whole string detected as one line covers both its truth pieces: the second piece counts as found too
+    for i in list(ut):
+        if truth[i].get("sub") == "string":
+            for i2, j in pairs:
+                if dets[j]["kind"] == "line" and _line_match(truth[i], dets[j]):
+                    pairs.append((i, j))
+                    ut.discard(i)
+                    break
     return pairs, ut, ud
 
 
