@@ -145,6 +145,17 @@ Re-fits only the regions you marked in the test bench and searches the detector 
 satisfy the most marks (correct kept, wrong removed, missed found). Writes `VERDICT_DIR/tuned_settings.json`;
 load it in the web UI with **Load tuned settings** (Settings tab).
 
+## Geometric abstraction
+
+```
+python tools/geometrize.py INPUT_DIR OUTPUT_DIR --shapes 3 [--kinds all|circle|rect,triangle|...]
+```
+
+Rebuilds every object of a flat illustration from a few simple shapes (circle, ellipse, rectangle, rounded
+rectangle, triangle, capsule; thin straight strokes stay lines) in the image's own colours: a stylised,
+geometric-minimal version as SVG + PNG preview. `--shapes 1` is very abstract, 5-6 stays close to the original.
+In code: `prims, svg = fs.geometrize(labels, palette, background, max_shapes=3)`.
+
 ## Region classifier (optional, for speed)
 
 A tiny CNN (~0.2 M parameters, < 1 MB, ONNX) looks at each region's mask and says which shape it is, so only that

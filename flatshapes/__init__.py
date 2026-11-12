@@ -14,6 +14,7 @@ from .svg import segments_to_d
 from .detect import detect_shape, detect_shapes, occluders, find_lines, components, get_pool
 
 from .parametric import fit_ring, fit_segment, fit_teardrop, fit_heart, fit_crescent
+from .abstract import geometrize, simplify_region, render as render_shapes
 from .classifier import region_tensor, classify, kinds_from_probs
 from .features import shape_features, candidate_kinds
 from .symmetry import Symmetry, find_symmetry, symmetrize
